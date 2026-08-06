@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  trading_bot:
+    build: .
+    container_name: arewerage_traiding_bot
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./trading_bot.db:/app/trading_bot.db
