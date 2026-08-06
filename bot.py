@@ -14,6 +14,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile
 from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.chart import BarChart, LineChart, Reference
 
 from database import (
     init_db, set_user_deposit, get_user_deposit,
@@ -354,9 +355,12 @@ async def process_custom_period(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "action_excel")
 async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
-    operations = get_user_operations(callback.from_user.id)
+    user_id = callback.from_user.id
+    operations = get_user_operations(user_id)
+
     if not operations:
-        await update_interface(state, callback, "⚠️ Нет данных для выгрузки в Excel.", reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        text = "⚠️ Нет данных для выгрузки в Excel!"
+        await update_interface(state, callback, text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
         return
 
     try:
@@ -364,22 +368,124 @@ async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
         sheets_data = defaultdict(list)
         months_ru = {1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель", 5: "Май", 6: "Июнь", 7: "Июль", 8: "Август", 9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь"}
 
+        # Расчет метрик для листа "Сводка"
+        trades = [r for r in operations if r[1] == "Сделка"]
+        total_trades = len(trades)
+        wins = sum(1 for r in trades if r[4] == "Win")
+        losses = sum(1 for r in trades if r[4] == "Loss")
+        winrate = (wins / total_trades) if total_trades > 0 else 0.0
+        total_pl = sum(r[5] for r in trades)
+
+        gross_profit = sum(r[5] for r in trades if r[5] > 0)
+        gross_loss = abs(sum(r[5] for r in trades if r[5] < 0))
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (gross_profit if gross_profit > 0 else 0.0)
+
+        peak, max_dd = -float('inf'), 0.0
+        for r in operations:
+            bal = r[6]
+            if bal > peak: peak = bal
+            dd = peak - bal
+            if dd > max_dd: max_dd = dd
+
+        current_deposit = get_user_deposit(user_id)
+
+        summary_rows = [
+            {"Показатель": "Текущий баланс", "Значение": current_deposit},
+            {"Показатель": "Всего сделок", "Значение": total_trades},
+            {"Показатель": "Прибыльных сделок", "Значение": wins},
+            {"Показатель": "Убыточных сделок", "Значение": losses},
+            {"Показатель": "Винрейт", "Значение": winrate},
+            {"Показатель": "Общий результат ($)", "Значение": total_pl},
+            {"Показатель": "Профит-фактор", "Значение": profit_factor},
+            {"Показатель": "Максимальная просадка ($)", "Значение": max_dd}
+        ]
+
+        # Данные для графика эквити (по операциям)
+        equity_rows = []
+        for idx, row in enumerate(operations, start=1):
+            equity_rows.append({"Операция": idx, "Баланс ($)": row[6]})
+
         for row in operations:
-            dt_obj = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+            date_time_str, op_type, pair, lot, result, amount, balance_after = row
+            dt_obj = datetime.strptime(date_time_str, "%Y-%m-%d %H:%M:%S")
             sheet_name = f"{months_ru[dt_obj.month]} {dt_obj.year}"
+
             sheets_data[sheet_name].append({
                 "Дата": dt_obj.strftime("%d.%m.%Y"),
                 "Время": dt_obj.strftime("%H:%M:%S"),
-                "Тип операции": row[1],
-                "Торговая пара": row[2] if row[2] != "-" else "",
-                "Лот": row[3] if row[3] > 0 else "",
-                "Исход": ("Плюс" if row[4] == "Win" else "Минус") if row[1] == "Сделка" else "-",
-                "Сумма операции ($)": row[5],
-                "Конечный депозит ($)": row[6]
+                "Тип операции": op_type,
+                "Торговая пара": pair if pair != "-" else "",
+                "Лот": lot if lot > 0 else "",
+                "Исход": ("Плюс" if result == "Win" else "Минус") if op_type == "Сделка" else "-",
+                "Сумма операции ($)": amount,
+                "Конечный депозит ($)": balance_after
             })
 
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            # 1. Записываем таблицу метрик в колонки A-B
+            df_summary = pd.DataFrame(summary_rows)
+            df_summary.to_excel(writer, index=False, sheet_name="Сводка", startrow=0, startcol=0)
+
+            # 2. Записываем таблицу истории баланса для графиков в колонки D-E
+            df_equity = pd.DataFrame(equity_rows)
+            df_equity.to_excel(writer, index=False, sheet_name="Сводка", startrow=0, startcol=3)
+
+            ws_summary = writer.sheets["Сводка"]
+            ws_summary.column_dimensions['A'].width = 30
+            ws_summary.column_dimensions['B'].width = 20
+            ws_summary.column_dimensions['C'].width = 4   # Отступ
+            ws_summary.column_dimensions['D'].width = 12
+            ws_summary.column_dimensions['E'].width = 18
+
+            # Форматирование таблицы метрик
+            for r_idx in range(2, ws_summary.max_row + 1):
+                metric_name = ws_summary.cell(row=r_idx, column=1).value
+                cell = ws_summary.cell(row=r_idx, column=2)
+                if not metric_name:
+                    continue
+                if "($)" in str(metric_name) or metric_name == "Текущий баланс":
+                    cell.number_format = '"$"#,##0.00'
+                elif metric_name == "Винрейт":
+                    cell.number_format = '0.0%'
+                elif metric_name == "Профит-фактор":
+                    cell.number_format = '0.00'
+                else:
+                    cell.number_format = '#,##0'
+
+            # --- Добавление графиков на лист "Сводка" ---
+            # А. Линейный график кривой депозита (Эквити)
+            chart_equity = LineChart()
+            chart_equity.title = "Динамика депозита (Эквити)"
+            chart_equity.style = 13
+            chart_equity.y_axis.title = "Баланс ($)"
+            chart_equity.x_axis.title = "Номер операции"
+            chart_equity.width = 16
+            chart_equity.height = 10
+
+            data_eq = Reference(ws_summary, min_col=5, min_row=1, max_row=len(operations)+1)
+            cats_eq = Reference(ws_summary, min_col=4, min_row=2, max_row=len(operations)+1)
+            chart_equity.add_data(data_eq, titles_from_data=True)
+            chart_equity.set_categories(cats_eq)
+            chart_equity.legend = None
+            ws_summary.add_chart(chart_equity, "G2")
+
+            # Б. Гистограмма побед и поражений
+            chart_wins = BarChart()
+            chart_wins.title = "Соотношение побед и поражений"
+            chart_wins.style = 10
+            chart_wins.y_axis.title = "Количество"
+            chart_wins.width = 14
+            chart_wins.height = 8
+
+            data_wins = Reference(ws_summary, min_col=2, min_row=4, max_row=5) # Строки Прибыльных и Убыточных сделок
+            cats_wins = Reference(ws_summary, min_col=1, min_row=4, max_row=5)
+            chart_wins.add_data(data_wins, titles_from_data=False)
+            chart_wins.set_categories(cats_wins)
+            chart_wins.legend = None
+            ws_summary.add_chart(chart_wins, "G18")
+
+            # 3. Создаем листы по месяцам с фильтрами и подсветкой
             green_fill = PatternFill(start_color="D4EDDA", end_color="D4EDDA", fill_type="solid")
             red_fill = PatternFill(start_color="F8D7DA", end_color="F8D7DA", fill_type="solid")
 
@@ -408,7 +514,7 @@ async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
 
         output.seek(0)
         document = BufferedInputFile(output.getvalue(), filename="trading_history.xlsx")
-        await update_interface(state, callback, "📁 **Excel-файл готов!**", reply_markup=get_main_keyboard(), parse_mode="Markdown", document=document)
+        await update_interface(state, callback, "📁 **Excel-файл со сводкой и графиками готов!**", reply_markup=get_main_keyboard(), parse_mode="Markdown", document=document)
     except Exception as e:
         logging.error(f"Excel error: {e}")
         await update_interface(state, callback, "⚠️ Ошибка генерации Excel.", reply_markup=get_main_keyboard(), parse_mode="Markdown")
