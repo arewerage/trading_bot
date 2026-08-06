@@ -1,10 +1,15 @@
+import os
 import sqlite3
 import json
 from datetime import datetime
 from aiogram.fsm.storage.base import BaseStorage, StorageKey
 from aiogram.fsm.state import State
 
-DB_NAME = "trading_bot.db"
+# Указываем папку и путь к базе данных
+DB_DIR = "data"
+if not os.path.exists(DB_DIR):
+    os.makedirs(DB_DIR, exist_ok=True)
+DB_NAME = os.path.join(DB_DIR, "trading_bot.db")
 
 class SQLiteFSMStorage(BaseStorage):
     """Персистентное хранилище состояний FSM на базе SQLite"""
