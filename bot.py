@@ -3,6 +3,7 @@ import io
 import logging
 import pandas as pd
 import os
+import openpyxl
 
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
@@ -13,7 +14,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile
 from openpyxl.styles import PatternFill, Font
 from openpyxl.utils import get_column_letter
-from openpyxl.chart import BarChart, LineChart, Reference
 
 from database import (
     init_db, set_user_deposit, get_user_deposit,
