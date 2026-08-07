@@ -8,7 +8,11 @@ from database import get_user_deposit
 def generate_excel_bytes(operations, user_id) -> bytes:
     from collections import defaultdict
     sheets_data = defaultdict(list)
-    months_ru = {1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель", 5: "Май", 6: "Июнь", 7: "Июль", 8: "Август", 9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь"}
+    months_ru = {
+        1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
+        5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
+        9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь"
+    }
 
     trades = [r for r in operations if r[1] == "Сделка"]
     total_trades = len(trades)
@@ -63,10 +67,16 @@ def generate_excel_bytes(operations, user_id) -> bytes:
         dt_obj = datetime.strptime(date_time_str, "%Y-%m-%d %H:%M:%S")
         sheet_name = f"{months_ru[dt_obj.month]} {dt_obj.year}"
 
+        # Четкое разделение типа операции для Excel (чтобы убыток не путался с выводом)
+        if op_type == "Сделка":
+            display_op_type = "Сделка (Плюс)" if result == "Win" else "Сделка (Минус)"
+        else:
+            display_op_type = op_type  # "Пополнение", "Вывод", "Старт"
+
         sheets_data[sheet_name].append({
             "Дата": dt_obj.strftime("%d.%m.%Y"),
             "Время": dt_obj.strftime("%H:%M:%S"),
-            "Тип операции": op_type,
+            "Тип операции": display_op_type,
             "Торговая пара": pair if pair != "-" else "",
             "Лот": lot if lot > 0 else "",
             "Исход": ("Плюс" if result == "Win" else "Минус") if op_type == "Сделка" else "-",
