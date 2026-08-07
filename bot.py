@@ -43,8 +43,8 @@ class DepositState(StatesGroup):
 class TradeState(StatesGroup):
     waiting_for_pair = State()
     waiting_for_lot = State()
-    waiting_for_result = State()
     waiting_for_profit = State()
+    waiting_for_confirmation = State()
 
 class StatsState(StatesGroup):
     waiting_for_custom_period = State()
@@ -59,6 +59,15 @@ def get_main_keyboard():
         [types.InlineKeyboardButton(text="📁 Скачать Excel", callback_data="action_excel")],
         [types.InlineKeyboardButton(text="🔄 Сброс данных", callback_data="action_reset")]
     ]
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def get_pairs_keyboard(user_id):
+    pairs = get_user_pairs(user_id)
+    keyboard = []
+    for p in pairs:
+        keyboard.append([types.InlineKeyboardButton(text=f"🔹 {p}", callback_data=f"sel_pair_{p}")])
+    keyboard.append([types.InlineKeyboardButton(text="✍️ Другая пара (ввести текстом)", callback_data="sel_pair_custom")])
+    keyboard.append([types.InlineKeyboardButton(text="◀️ Отмена", callback_data="main_menu")])
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def get_stats_keyboard(user_id):
@@ -135,7 +144,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     deposit = get_user_deposit(user_id)
 
     if deposit <= 0:
-        text = "🤖 **Торговый бот-статистики**\n\nДобро пожаловать! Введите сумму вашего **стартового депозита** цифрами (например, `1000`):"
+        text = "🤖 **Бот для торговой статистики**\n\nДобро пожаловать! Введите сумму вашего **стартового депозита** цифрами (например, `1000`):"
         await update_interface(state, message, text, parse_mode="Markdown")
         await state.set_state(DepositState.waiting_for_deposit)
     else:
@@ -149,7 +158,7 @@ async def process_main_menu(callback: types.CallbackQuery, state: FSMContext):
     deposit = get_user_deposit(user_id)
 
     if deposit <= 0:
-        text = "🤖 **Торговый бот-статистики**\n\nВведите сумму вашего **стартового депозита** цифрами (например, `1000`):"
+        text = "🤖 **Бот для торговой статистики**\n\nВведите сумму вашего **стартового депозита** цифрами (например, `1000`):"
         await update_interface(state, callback, text, parse_mode="Markdown")
         await state.set_state(DepositState.waiting_for_deposit)
     else:
@@ -165,14 +174,14 @@ async def process_deposit(message: types.Message, state: FSMContext):
             await update_interface(state, message, "⚠️ Депозит должен быть больше нуля:", parse_mode="Markdown")
             return
         set_user_deposit(message.from_user.id, deposit, op_type="Старт", amount=deposit)
-        await update_interface(state, message, f"✅ Стартовый депозит установлен: **{deposit:.2f} USD**", reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        await update_interface(state, message, f"✅ Стартовый депозит успешно установлен: **{deposit:.2f} USD**", reply_markup=get_main_keyboard(), parse_mode="Markdown")
         await state.clear()
     except ValueError:
-        await update_interface(state, message, "⚠️ Введите корректное число для депозита.", parse_mode="Markdown")
+        await update_interface(state, message, "⚠️ Пожалуйста, введите корректное число для депозита.", parse_mode="Markdown")
 
 @dp.callback_query(F.data == "action_top_up")
 async def callback_top_up(callback: types.CallbackQuery, state: FSMContext):
-    await update_interface(state, callback, "🟢 **Пополнение**\n\nВведите сумму (например, `500`):", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+    await update_interface(state, callback, "🟢 **Пополнение депозита**\n\nВведите сумму (например, `500`):", reply_markup=get_back_keyboard(), parse_mode="Markdown")
     await state.set_state(DepositState.waiting_for_top_up)
 
 @dp.message(DepositState.waiting_for_top_up)
@@ -185,7 +194,7 @@ async def process_top_up(message: types.Message, state: FSMContext):
         user_id = message.from_user.id
         new_deposit = get_user_deposit(user_id) + amount
         log_balance_operation(user_id, "Пополнение", amount, new_deposit)
-        await update_interface(state, message, f"✅ Пополнено на **+{amount:.2f} USD**\n💰 Баланс: **{new_deposit:.2f} USD**", reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        await update_interface(state, message, f"✅ Баланс успешно пополнен на **+{amount:.2f} USD**\n💰 Новый депозит: **{new_deposit:.2f} USD**", reply_markup=get_main_keyboard(), parse_mode="Markdown")
         await state.clear()
     except ValueError:
         await update_interface(state, message, "⚠️ Введите числовое значение.", reply_markup=get_back_keyboard(), parse_mode="Markdown")
@@ -193,7 +202,7 @@ async def process_top_up(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "action_withdraw")
 async def callback_withdraw(callback: types.CallbackQuery, state: FSMContext):
     deposit = get_user_deposit(callback.from_user.id)
-    await update_interface(state, callback, f"🔴 **Вывод средств**\n\nБаланс: **{deposit:.2f} USD**\nВведите сумму:", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+    await update_interface(state, callback, f"🔴 **Вывод средств**\n\nТекущий баланс: **{deposit:.2f} USD**\nВведите сумму:", reply_markup=get_back_keyboard(), parse_mode="Markdown")
     await state.set_state(DepositState.waiting_for_withdraw)
 
 @dp.message(DepositState.waiting_for_withdraw)
@@ -206,11 +215,11 @@ async def process_withdraw(message: types.Message, state: FSMContext):
         user_id = message.from_user.id
         current_deposit = get_user_deposit(user_id)
         if amount > current_deposit:
-            await update_interface(state, message, f"⚠️ Нельзя вывести больше баланса! Доступно: **{current_deposit:.2f} USD**", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+            await update_interface(state, message, f"⚠️ Нельзя вывести больше, чем есть на балансе! Доступно: **{current_deposit:.2f} USD**", reply_markup=get_back_keyboard(), parse_mode="Markdown")
             return
         new_deposit = current_deposit - amount
         log_balance_operation(user_id, "Вывод", -amount, new_deposit)
-        await update_interface(state, message, f"✅ Выведено: **-{amount:.2f} USD**\n💰 Баланс: **{new_deposit:.2f} USD**", reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        await update_interface(state, message, f"✅ Успешно выведено: **-{amount:.2f} USD**\n💰 Новый депозит: **{new_deposit:.2f} USD**", reply_markup=get_main_keyboard(), parse_mode="Markdown")
         await state.clear()
     except ValueError:
         await update_interface(state, message, "⚠️ Введите числовое значение.", reply_markup=get_back_keyboard(), parse_mode="Markdown")
@@ -218,68 +227,138 @@ async def process_withdraw(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "action_reset")
 async def callback_reset_confirm(callback: types.CallbackQuery, state: FSMContext):
     keyboard = [[types.InlineKeyboardButton(text="⚠️ Да, удалить всё", callback_data="reset_yes")], [types.InlineKeyboardButton(text="◀️ Отмена", callback_data="main_menu")]]
-    await update_interface(state, callback, "🚨 **Внимание!** Вся история будет удалена. Продолжить?", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="Markdown")
+    await update_interface(state, callback, "🚨 **Внимание!** Вся история операций будет удалена. Продолжить?", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "reset_yes")
 async def callback_reset_execute(callback: types.CallbackQuery, state: FSMContext):
     reset_user_data(callback.from_user.id)
-    await update_interface(state, callback, "🔄 Данные сброшены.\n\nВведите новый **стартовый депозит**:", parse_mode="Markdown")
+    await update_interface(state, callback, "🔄 Данные успешно сброшены.\n\nВведите новый **стартовый депозит**:", parse_mode="Markdown")
     await state.set_state(DepositState.waiting_for_deposit)
 
+# --- Добавление сделки ---
 @dp.callback_query(F.data == "action_add_trade")
 async def callback_add_trade(callback: types.CallbackQuery, state: FSMContext):
     if get_user_deposit(callback.from_user.id) <= 0:
         await callback.answer("Сначала установите стартовый депозит!", show_alert=True)
         return
-    await update_interface(state, callback, "Введите торговую пару текстом (например, `XAUUSD`):", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+    text = "Выберите торговую пару из списка или введите новую:"
+    await update_interface(state, callback, text, reply_markup=get_pairs_keyboard(callback.from_user.id), parse_mode="Markdown")
     await state.set_state(TradeState.waiting_for_pair)
+
+@dp.callback_query(F.data.startswith("sel_pair_"), TradeState.waiting_for_pair)
+async def process_pair_callback(callback: types.CallbackQuery, state: FSMContext):
+    val = callback.data.replace("sel_pair_", "")
+    if val == "custom":
+        text = "Введите название новой торговой пары текстом (например, `EURUSD`):"
+        await update_interface(state, callback, text, reply_markup=get_back_keyboard(), parse_mode="Markdown")
+    else:
+        await state.update_data(pair=val)
+        text = f"Выбрана пара: `{val}`\n\nВведите объем лота (например, `0.1`):"
+        await update_interface(state, callback, text, reply_markup=get_back_keyboard(), parse_mode="Markdown")
+        await state.set_state(TradeState.waiting_for_lot)
 
 @dp.message(TradeState.waiting_for_pair)
 async def process_pair_text(message: types.Message, state: FSMContext):
-    pair = message.text.strip().upper()
+    pair = message.text.strip().upper().replace("/", "").replace("-", "").replace(" ", "")
     if not pair:
-        await update_interface(state, message, "⚠️ Пара не может быть пустой:", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+        text = "⚠️ Пара не может быть пустой. Введите название пары (например, `XAUUSD`):"
+        await update_interface(state, message, text, reply_markup=get_back_keyboard(), parse_mode="Markdown")
         return
     await state.update_data(pair=pair)
-    await update_interface(state, message, f"Пара: `{pair}`\n\nВведите объем лота (например, `0.1`):", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+    text = f"Выбрана пара: `{pair}`\n\nВведите объем лота (например, `0.1`):"
+    await update_interface(state, message, text, reply_markup=get_back_keyboard(), parse_mode="Markdown")
     await state.set_state(TradeState.waiting_for_lot)
 
 @dp.message(TradeState.waiting_for_lot)
 async def process_lot(message: types.Message, state: FSMContext):
     try:
         lot = float(message.text.replace(",", "."))
-        await state.update_data(lot=lot)
-        keyboard = [[types.InlineKeyboardButton(text="✅ Плюс", callback_data="result_win"), types.InlineKeyboardButton(text="❌ Минус", callback_data="result_loss")], [types.InlineKeyboardButton(text="◀️ Отмена", callback_data="main_menu")]]
-        await update_interface(state, message, "Выберите исход сделки:", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="Markdown")
-        await state.set_state(TradeState.waiting_for_result)
-    except ValueError:
-        await update_interface(state, message, "⚠️ Введите корректный лот:", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+        if lot <= 0:
+            raise ValueError()
 
-@dp.callback_query(F.data.startswith("result_"))
-async def process_result_callback(callback: types.CallbackQuery, state: FSMContext):
-    result = "Win" if callback.data == "result_win" else "Loss"
-    await state.update_data(result=result)
-    await update_interface(state, callback, f"Исход: `{'Плюс' if result == 'Win' else 'Минус'}`\n\nВведите сумму профита/убытка в USD (`50` или `-20`):", reply_markup=get_back_keyboard(), parse_mode="Markdown")
-    await state.set_state(TradeState.waiting_for_profit)
+        warning_msg = ""
+        if lot > 50.0:
+            warning_msg = "\n\n⚠️ *Предупреждение: указан очень большой объем лота (> 50).*\n"
+
+        await state.update_data(lot=lot)
+        text = f"{warning_msg}Введите сумму профита или убытка в USD\n*(для прибыли укажите число без знака или с плюсом, для убытка — со знаком минус, например: `50` или `-20`)*:"
+        await update_interface(state, message, text, reply_markup=get_back_keyboard(), parse_mode="Markdown")
+        await state.set_state(TradeState.waiting_for_profit)
+    except ValueError:
+        await update_interface(state, message, "⚠️ Введите корректный объем лота (> 0):", reply_markup=get_back_keyboard(), parse_mode="Markdown")
 
 @dp.message(TradeState.waiting_for_profit)
 async def process_profit(message: types.Message, state: FSMContext):
     try:
         profit_loss = float(message.text.replace(",", "."))
         data = await state.get_data()
+        pair = data["pair"]
+        lot = data["lot"]
+        result = "Win" if profit_loss >= 0 else "Loss"
+
         user_id = message.from_user.id
-        new_deposit = get_user_deposit(user_id) + profit_loss
-        add_trade_operation(user_id, data["pair"], data["lot"], data["result"], profit_loss, new_deposit)
-        text = f"✅ **Сделка сохранена!**\n🔹 Пара: `{data['pair']}`\n🔹 Профит: `{profit_loss:+.2f} USD`\n💰 Баланс: `{new_deposit:.2f} USD`"
-        await update_interface(state, message, text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
-        await state.clear()
+        current_deposit = get_user_deposit(user_id)
+
+        warnings = []
+        if profit_loss < 0 and abs(profit_loss) >= current_deposit:
+            warnings.append("⚠️ *Внимание: убыток превышает или равен вашему балансу! Счёт обнулится.*")
+        if abs(profit_loss) > current_deposit * 5:
+            warnings.append("⚠️ *Внимание: сумма более чем в 5 раз превышает баланс (возможна опечатка).*")
+
+        await state.update_data(profit_loss=profit_loss, result=result)
+
+        keyboard = [
+            [types.InlineKeyboardButton(text="✅ Подтвердить и сохранить", callback_data="trade_confirm")],
+            [types.InlineKeyboardButton(text="❌ Отмена", callback_data="main_menu")]
+        ]
+
+        warn_text = "\n".join(warnings) + "\n\n" if warnings else ""
+        text = (
+            f"{warn_text}📋 **Проверьте данные сделки:**\n\n"
+            f"🔹 Пара: `{pair}`\n"
+            f"🔹 Лот: `{lot}`\n"
+            f"🔹 Исход: `{'Плюс' if result == 'Win' else 'Минус'}`\n"
+            f"🔹 Профит / Убыток: `{profit_loss:+.2f} USD`"
+        )
+        await update_interface(state, message, text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="Markdown")
+        await state.set_state(TradeState.waiting_for_confirmation)
     except ValueError:
-        await update_interface(state, message, "⚠️ Введите числовое значение профита:", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+        await update_interface(state, message, "⚠️ Введите числовое значение суммы (например, `50` или `-20`):", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "trade_confirm", TradeState.waiting_for_confirmation)
+async def process_trade_confirm(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    if "pair" not in data or "profit_loss" not in data:
+        await callback.answer("⚠️ Эта сделка уже была сохранена или отменена.", show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    pair = data["pair"]
+    lot = data["lot"]
+    result = data["result"]
+    profit_loss = data["profit_loss"]
+
+    await state.clear()
+
+    current_deposit = get_user_deposit(user_id)
+    new_deposit = max(0.0, current_deposit + profit_loss)
+
+    add_trade_operation(user_id, pair, lot, result, profit_loss, new_deposit)
+
+    text = (
+        "✅ **Сделка успешно сохранена!**\n\n"
+        f"🔹 Пара: `{pair}`\n"
+        f"🔹 Лот: `{lot}`\n"
+        f"🔹 Результат: `{'Плюс' if result == 'Win' else 'Минус'}`\n"
+        f"🔹 Профит / Убыток: `{profit_loss:+.2f} USD`\n"
+        f"💰 Новый депозит: `{new_deposit:.2f} USD`"
+    )
+    await update_interface(state, callback, text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
 # --- Статистика и Метрики ---
 @dp.callback_query(F.data == "action_stats")
 async def callback_stats_menu(callback: types.CallbackQuery, state: FSMContext):
-    await update_interface(state, callback, "📊 **Меню статистики**\n\nВыберите период или пару:", reply_markup=get_stats_keyboard(callback.from_user.id), parse_mode="Markdown")
+    await update_interface(state, callback, "📊 **Меню статистики**\n\nВыберите период или торговую пару:", reply_markup=get_stats_keyboard(callback.from_user.id), parse_mode="Markdown")
 
 def calculate_advanced_stats(operations, filter_func):
     filtered = [r for r in operations if r[1] == "Сделка" and filter_func(r)]
@@ -317,9 +396,9 @@ async def callback_stats_period(callback: types.CallbackQuery, state: FSMContext
     stats = calculate_advanced_stats(get_user_operations(callback.from_user.id), f_func)
 
     if not stats:
-        text = f"📊 **Статистика за {label}**\n\nСделок не найдено."
+        text = f"📊 **Статистика за {label}:**\n\nСделок за данный период не найдено."
     else:
-        text = f"📊 **Статистика за {label}:**\n\n📁 Сделок: `{stats['total']}`\n✅ Плюсов: `{stats['wins']}` | ❌ Минусов: `{stats['losses']}`\n🎯 Винрейт: `{stats['winrate']:.1f}%`\n💰 Итог: `{stats['total_pl']:+.2f} USD`\n📈 Профит-фактор: `{stats['profit_factor']:.2f}`\n🟢 Ср. прибыль: `+{stats['avg_win']:.2f} USD`\n🔴 Ср. убыток: `-{stats['avg_loss']:.2f} USD`\n📉 Макс. просадка: `{stats['max_dd']:.2f} USD`"
+        text = f"📊 **Статистика за {label}:**\n\n📁 Всего сделок: `{stats['total']}`\n✅ Плюсов: `{stats['wins']}` | ❌ Минусов: `{stats['losses']}`\n🎯 Винрейт: `{stats['winrate']:.1f}%`\n💰 Общий итог: `{stats['total_pl']:+.2f} USD`\n📈 Профит-фактор: `{stats['profit_factor']:.2f}`\n🟢 Ср. прибыль: `+{stats['avg_win']:.2f} USD`\n🔴 Ср. убыток: `-{stats['avg_loss']:.2f} USD`\n📉 Макс. просадка: `{stats['max_dd']:.2f} USD`"
     await update_interface(state, callback, text, reply_markup=get_stats_keyboard(callback.from_user.id), parse_mode="Markdown")
 
 @dp.callback_query(F.data.startswith("stats_pair_"))
@@ -327,28 +406,40 @@ async def callback_stats_pair(callback: types.CallbackQuery, state: FSMContext):
     pair = callback.data.replace("stats_pair_", "")
     stats = calculate_advanced_stats(get_user_operations(callback.from_user.id), lambda r: r[2] == pair)
     if not stats:
-        text = f"📊 **Статистика по паре {pair}**\n\nСделок не найдено."
+        text = f"📊 **Статистика по паре `{pair}`:**\n\nСделок по данной паре не найдено."
     else:
-        text = f"📊 **Пара `{pair}`:**\n\n📁 Сделок: `{stats['total']}`\n✅ Плюсов: `{stats['wins']}` | ❌ Минусов: `{stats['losses']}`\n🎯 Винрейт: `{stats['winrate']:.1f}%`\n💰 Итог: `{stats['total_pl']:+.2f} USD`\n📈 Профит-фактор: `{stats['profit_factor']:.2f}`"
+        text = f"📊 **Статистика по паре `{pair}`:**\n\n📁 Всего сделок: `{stats['total']}`\n✅ Плюсов: `{stats['wins']}` | ❌ Минусов: `{stats['losses']}`\n🎯 Винрейт: `{stats['winrate']:.1f}%`\n💰 Общий итог: `{stats['total_pl']:+.2f} USD`\n📈 Профит-фактор: `{stats['profit_factor']:.2f}`"
     await update_interface(state, callback, text, reply_markup=get_stats_keyboard(callback.from_user.id), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "stats_custom")
 async def callback_stats_custom(callback: types.CallbackQuery, state: FSMContext):
-    await update_interface(state, callback, "⏱ **Произвольный период**\n\nВведите диапазон дат в формате `ДД.ММ.ГГГГ - ДД.ММ.ГГГГ`", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+    await update_interface(state, callback, "⏱ **Произвольный период**\n\nВведите диапазон дат в формате `ДД.ММ.ГГГГ - ДД.ММ.ГГГГ`\n📌 *Пример:* `01.06.2026 - 15.06.2026`", reply_markup=get_back_keyboard(), parse_mode="Markdown")
     await state.set_state(StatsState.waiting_for_custom_period)
 
 @dp.message(StatsState.waiting_for_custom_period)
 async def process_custom_period(message: types.Message, state: FSMContext):
     try:
         parts = message.text.strip().split("-")
+        if len(parts) != 2:
+            raise ValueError()
+
         start_date = datetime.strptime(parts[0].strip(), "%d.%m.%Y").date()
         end_date = datetime.strptime(parts[1].strip(), "%d.%m.%Y").date()
+        today = datetime.now().date()
+
+        if start_date > end_date:
+            raise ValueError("Дата начала позже даты окончания")
+        if start_date > today or end_date > today:
+            raise ValueError("Дата из будущего")
+
         stats = calculate_advanced_stats(get_user_operations(message.from_user.id), lambda r: start_date <= datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S").date() <= end_date)
-        text = f"📊 **Период:**\n\n📁 Сделок: `{stats['total']}`\n💰 Итог: `{stats['total_pl']:+.2f} USD`" if stats else "📊 Сделок не найдено."
+        text = f"📊 **Статистика за период ({parts[0].strip()} - {parts[1].strip()}):**\n\n📁 Всего сделок: `{stats['total']}`\n💰 Общий итог: `{stats['total_pl']:+.2f} USD`" if stats else "📊 За выбранный период сделок не найдено."
         await update_interface(state, message, text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
         await state.clear()
-    except Exception:
-        await update_interface(state, message, "⚠️ Ошибка формата. Введите в формате `ДД.ММ.ГГГГ - ДД.ММ.ГГГГ`", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+    except Exception as e:
+        err_text = str(e) if str(e) in ["Дата начала позже даты окончания", "Дата из будущего"] else "Неверный формат"
+        msg = f"⚠️ Ошибка: {err_text}.\nВведите даты строго в формате `ДД.ММ.ГГГГ - ДД.ММ.ГГГГ`"
+        await update_interface(state, message, msg, reply_markup=get_back_keyboard(), parse_mode="Markdown")
 
 # --- Генерация Excel ---
 @dp.callback_query(F.data == "action_excel")
@@ -358,7 +449,7 @@ async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
     operations = get_user_operations(user_id)
 
     if not operations:
-        text = "⚠️ Нет данных для выгрузки в Excel!"
+        text = "⚠️ У вас пока нет сохраненных операций для выгрузки в Excel!"
         await update_interface(state, callback, text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
         return
 
@@ -378,7 +469,6 @@ async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
         gross_loss = abs(sum(r[5] for r in trades if r[5] < 0))
         profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (gross_profit if gross_profit > 0 else 0.0)
 
-        # Расчет серий (стриков) побед и поражений
         max_win_streak, max_loss_streak = 0, 0
         curr_win, curr_loss = 0, 0
         for r in trades:
@@ -400,7 +490,6 @@ async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
 
         current_deposit = get_user_deposit(user_id)
 
-        # 1. Основные метрики
         summary_rows = [
             {"Показатель": "Текущий баланс", "Значение": current_deposit},
             {"Показатель": "Всего сделок", "Значение": total_trades},
@@ -414,9 +503,7 @@ async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
             {"Показатель": "Макс. серия поражений", "Значение": max_loss_streak}
         ]
 
-        # 2. Данные по месяцам
         monthly_stats = defaultdict(lambda: {"total": 0, "wins": 0, "losses": 0, "pl": 0.0})
-        # 3. Данные по парам
         pair_stats = defaultdict(lambda: {"total": 0, "wins": 0, "losses": 0, "pl": 0.0})
 
         for row in operations:
@@ -424,7 +511,6 @@ async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
             dt_obj = datetime.strptime(date_time_str, "%Y-%m-%d %H:%M:%S")
             sheet_name = f"{months_ru[dt_obj.month]} {dt_obj.year}"
 
-            # Заполняем данные для месячных листов
             sheets_data[sheet_name].append({
                 "Дата": dt_obj.strftime("%d.%m.%Y"),
                 "Время": dt_obj.strftime("%H:%M:%S"),
@@ -449,7 +535,6 @@ async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
                 monthly_stats[m_key]["pl"] += amount
                 pair_stats[pair]["pl"] += amount
 
-        # Формируем списки для таблиц сводки
         monthly_rows = []
         for m, s in monthly_stats.items():
             wr = (s["wins"] / s["total"]) if s["total"] > 0 else 0.0
@@ -464,38 +549,33 @@ async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             ws_summary = writer.book.create_sheet(title="Сводка", index=0)
 
-            # Записываем таблицу основных метрик
             ws_summary.append(["ОБЩИЕ ПОКАЗАТЕЛИ"])
             ws_summary.append(["Показатель", "Значение"])
             for item in summary_rows:
                 ws_summary.append([item["Показатель"], item["Значение"]])
 
-            ws_summary.append([]) # Пустая строка
+            ws_summary.append([])
 
-            # Записываем таблицу по месяцам
             ws_summary.append(["СТАТИСТИКА ПО МЕСЯЦАМ"])
             ws_summary.append(["Месяц", "Сделок", "Плюсы", "Минусы", "Винрейт", "Итог ($)"])
             for item in monthly_rows:
                 ws_summary.append([item["Месяц"], item["Сделок"], item["Плюсы"], item["Минусы"], item["Винрейт"], item["Итог ($)"]])
 
-            ws_summary.append([]) # Пустая строка
+            ws_summary.append([])
 
-            # Записываем таблицу по парам
             ws_summary.append(["СТАТИСТИКА ПО ТОРГОВЫМ ПАРАМ"])
             ws_summary.append(["Пара", "Сделок", "Плюсы", "Минусы", "Винрейт", "Итог ($)"])
             for item in pair_rows:
                 ws_summary.append([item["Пара"], item["Сделок"], item["Плюсы"], item["Минусы"], item["Винрейт"], item["Итог ($)"]])
 
-            # Форматирование листа "Сводка"
             for row in ws_summary.iter_rows(min_row=1, max_row=ws_summary.max_row, min_col=1, max_col=6):
                 for cell in row:
                     if cell.value in ["ОБЩИЕ ПОКАЗАТЕЛИ", "СТАТИСТИКА ПО МЕСЯЦАМ", "СТАТИСТИКА ПО ТОРГОВЫМ ПАРАМ"]:
-                        cell.font = openpyxl.styles.Font(bold=True, size=11)
-                    elif cell.row in [2, len(summary_rows)+4, len(summary_rows)+len(monthly_rows)+7]: # Заголовки таблиц
-                        cell.font = openpyxl.styles.Font(bold=True)
+                        cell.font = Font(bold=True, size=11)
+                    elif cell.row in [2, len(summary_rows)+4, len(summary_rows)+len(monthly_rows)+7]:
+                        cell.font = Font(bold=True)
                         cell.fill = PatternFill(start_color="E9ECEF", end_color="E9ECEF", fill_type="solid")
 
-            # Формат ячеек на Сводке
             for r in range(3, len(summary_rows) + 3):
                 val_name = ws_summary.cell(row=r, column=1).value
                 val_cell = ws_summary.cell(row=r, column=2)
@@ -513,7 +593,6 @@ async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
                 col_letter = get_column_letter(col[0].column)
                 ws_summary.column_dimensions[col_letter].width = max(max_len + 4, 15)
 
-            # 3. Создаем листы по месяцам с фильтрами и подсветкой
             green_fill = PatternFill(start_color="D4EDDA", end_color="D4EDDA", fill_type="solid")
             red_fill = PatternFill(start_color="F8D7DA", end_color="F8D7DA", fill_type="solid")
 
@@ -545,7 +624,7 @@ async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
         await update_interface(state, callback, "📁 **Excel-файл со структурированной сводкой готов!**", reply_markup=get_main_keyboard(), parse_mode="Markdown", document=document)
     except Exception as e:
         logging.error(f"Excel error: {e}")
-        await update_interface(state, callback, "⚠️ Ошибка генерации Excel.", reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        await update_interface(state, callback, "⚠️ Произошла ошибка при генерации Excel.", reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
 async def main():
     init_db()
