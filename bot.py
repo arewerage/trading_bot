@@ -22,6 +22,16 @@ from database import (
     get_user_pairs, reset_user_data, SQLiteFSMStorage
 )
 
+from keyboards.inline import (
+    get_main_keyboard, get_history_keyboard, get_currency_keyboard,
+    get_pairs_keyboard, get_stats_keyboard, get_back_keyboard
+)
+
+from states.fsm import DepositState, TradeState, StatsState
+
+from utils.analytics import calculate_advanced_stats
+from utils.excel import generate_excel_bytes
+
 load_dotenv()
 
 API_TOKEN = os.getenv("API_TOKEN")
