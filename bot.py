@@ -387,18 +387,48 @@ def calculate_advanced_stats(operations, filter_func):
 @dp.callback_query(F.data.in_({"stats_day", "stats_week", "stats_month"}))
 async def callback_stats_period(callback: types.CallbackQuery, state: FSMContext):
     now = datetime.now()
-    period_map = {
-        "stats_day": ("день", lambda r: datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S").date() == now.date()),
-        "stats_week": ("неделю", lambda r: datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S") >= now - timedelta(days=7)),
-        "stats_month": ("месяц", lambda r: (dt := datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S")).year == now.year and dt.month == now.month)
-    }
-    label, f_func = period_map[callback.data]
+
+    if callback.data == "stats_day":
+        label = "день"
+        start_date = now.date()
+        end_date = now.date()
+        f_func = lambda r: datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S").date() == now.date()
+        date_str = start_date.strftime("%d.%m.%Y")
+
+    elif callback.data == "stats_week":
+        label = "неделю"
+        end_date = now.date()
+        start_date = (now - timedelta(days=7)).date()
+        f_func = lambda r: datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S") >= now - timedelta(days=7)
+        date_str = f"{start_date.strftime('%d.%m.%Y')} — {end_date.strftime('%d.%m.%Y')}"
+
+    elif callback.data == "stats_month":
+        label = "месяц"
+        start_date = now.replace(day=1).date()
+        if now.month == 12:
+            next_month = now.replace(year=now.year + 1, month=1, day=1)
+        else:
+            next_month = now.replace(month=now.month + 1, day=1)
+        end_date = (next_month - timedelta(days=1)).date()
+        f_func = lambda r: (dt := datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S")).year == now.year and dt.month == now.month
+        date_str = f"{start_date.strftime('%d.%m.%Y')} — {end_date.strftime('%d.%m.%Y')}"
+
     stats = calculate_advanced_stats(get_user_operations(callback.from_user.id), f_func)
 
     if not stats:
-        text = f"📊 **Статистика за {label}:**\n\nСделок за данный период не найдено."
+        text = f"📊 **Статистика за {label} ({date_str}):**\n\nСделок за данный период не найдено."
     else:
-        text = f"📊 **Статистика за {label}:**\n\n📁 Всего сделок: `{stats['total']}`\n✅ Плюсов: `{stats['wins']}` | ❌ Минусов: `{stats['losses']}`\n🎯 Винрейт: `{stats['winrate']:.1f}%`\n💰 Общий итог: `{stats['total_pl']:+.2f} USD`\n📈 Профит-фактор: `{stats['profit_factor']:.2f}`\n🟢 Ср. прибыль: `+{stats['avg_win']:.2f} USD`\n🔴 Ср. убыток: `-{stats['avg_loss']:.2f} USD`\n📉 Макс. просадка: `{stats['max_dd']:.2f} USD`"
+        text = (
+            f"📊 **Статистика за {label} ({date_str}):**\n\n"
+            f"📁 Всего сделок: `{stats['total']}`\n"
+            f"✅ Плюсов: `{stats['wins']}` | ❌ Минусов: `{stats['losses']}`\n"
+            f"🎯 Винрейт: `{stats['winrate']:.1f}%`\n"
+            f"💰 Общий итог: `{stats['total_pl']:+.2f} USD`\n"
+            f"📈 Профит-фактор: `{stats['profit_factor']:.2f}`\n"
+            f"🟢 Ср. прибыль: `+{stats['avg_win']:.2f} USD`\n"
+            f"🔴 Ср. убыток: `-{stats['avg_loss']:.2f} USD`\n"
+            f"📉 Макс. просадка: `{stats['max_dd']:.2f} USD`"
+        )
     await update_interface(state, callback, text, reply_markup=get_stats_keyboard(callback.from_user.id), parse_mode="Markdown")
 
 @dp.callback_query(F.data.startswith("stats_pair_"))
@@ -408,7 +438,14 @@ async def callback_stats_pair(callback: types.CallbackQuery, state: FSMContext):
     if not stats:
         text = f"📊 **Статистика по паре `{pair}`:**\n\nСделок по данной паре не найдено."
     else:
-        text = f"📊 **Статистика по паре `{pair}`:**\n\n📁 Всего сделок: `{stats['total']}`\n✅ Плюсов: `{stats['wins']}` | ❌ Минусов: `{stats['losses']}`\n🎯 Винрейт: `{stats['winrate']:.1f}%`\n💰 Общий итог: `{stats['total_pl']:+.2f} USD`\n📈 Профит-фактор: `{stats['profit_factor']:.2f}`"
+        text = (
+            f"📊 **Статистика по паре `{pair}`:**\n\n"
+            f"📁 Всего сделок: `{stats['total']}`\n"
+            f"✅ Плюсов: `{stats['wins']}` | ❌ Минусов: `{stats['losses']}`\n"
+            f"🎯 Винрейт: `{stats['winrate']:.1f}%`\n"
+            f"💰 Общий итог: `{stats['total_pl']:+.2f} USD`\n"
+            f"📈 Профит-фактор: `{stats['profit_factor']:.2f}`"
+        )
     await update_interface(state, callback, text, reply_markup=get_stats_keyboard(callback.from_user.id), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "stats_custom")
@@ -449,7 +486,7 @@ async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
     operations = get_user_operations(user_id)
 
     if not operations:
-        text = "⚠️ У вас пока нет сохраненных операций для выгрузки в Excel!"
+        text = "⚠️ Нет данных для выгрузки в Excel!"
         await update_interface(state, callback, text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
         return
 
