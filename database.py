@@ -94,6 +94,7 @@ def init_db():
         )
     """)
 
+    # Таблица операций с поддержкой риска в процентах (risk_pct)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS operations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,6 +107,7 @@ def init_db():
             amount REAL,           -- Изменение суммы (+/-)
             balance_after REAL,    -- Депозит после операции
             note TEXT DEFAULT '',  -- Заметка к сделке
+            risk_pct REAL DEFAULT 0.0, -- Риск в % от депозита
             FOREIGN KEY (user_id) REFERENCES users (user_id)
         )
     """)
@@ -124,8 +126,8 @@ def set_user_deposit_and_currency(user_id: int, deposit: float, currency: str, o
     """, (user_id, deposit, currency, deposit, currency))
 
     cursor.execute("""
-        INSERT INTO operations (user_id, date, op_type, pair, lot, result, amount, balance_after, note)
-        VALUES (?, ?, ?, '-', 0.0, '-', ?, ?, '')
+        INSERT INTO operations (user_id, date, op_type, pair, lot, result, amount, balance_after, note, risk_pct)
+        VALUES (?, ?, ?, '-', 0.0, '-', ?, ?, '', 0.0)
     """, (user_id, date_str, op_type, amount, deposit))
 
     conn.commit()
@@ -139,8 +141,8 @@ def log_balance_operation(user_id: int, op_type: str, amount: int | float, new_d
     cursor.execute("UPDATE users SET deposit = ? WHERE user_id = ?", (new_deposit, user_id))
 
     cursor.execute("""
-        INSERT INTO operations (user_id, date, op_type, pair, lot, result, amount, balance_after, note)
-        VALUES (?, ?, ?, '-', 0.0, '-', ?, ?, '')
+        INSERT INTO operations (user_id, date, op_type, pair, lot, result, amount, balance_after, note, risk_pct)
+        VALUES (?, ?, ?, '-', 0.0, '-', ?, ?, '', 0.0)
     """, (user_id, date_str, op_type, amount, new_deposit))
 
     conn.commit()
@@ -162,7 +164,7 @@ def get_user_currency(user_id: int) -> str:
     conn.close()
     return row[0] if row and row[0] else "USD"
 
-def add_trade_operation(user_id: int, pair: str, lot: float, result: str, profit_loss: float, new_deposit: float, note: str = ""):
+def add_trade_operation(user_id: int, pair: str, lot: float, result: str, profit_loss: float, new_deposit: float, note: str = "", risk_pct: float = 0.0):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -170,9 +172,9 @@ def add_trade_operation(user_id: int, pair: str, lot: float, result: str, profit
     cursor.execute("UPDATE users SET deposit = ? WHERE user_id = ?", (new_deposit, user_id))
 
     cursor.execute("""
-        INSERT INTO operations (user_id, date, op_type, pair, lot, result, amount, balance_after, note)
-        VALUES (?, ?, 'Сделка', ?, ?, ?, ?, ?, ?)
-    """, (user_id, date_str, pair, lot, result, profit_loss, new_deposit, note))
+        INSERT INTO operations (user_id, date, op_type, pair, lot, result, amount, balance_after, note, risk_pct)
+        VALUES (?, ?, 'Сделка', ?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, date_str, pair, lot, result, profit_loss, new_deposit, note, risk_pct))
 
     conn.commit()
     conn.close()
@@ -181,7 +183,7 @@ def get_user_operations(user_id: int):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT date, op_type, pair, lot, result, amount, balance_after, note
+        SELECT date, op_type, pair, lot, result, amount, balance_after, note, risk_pct
         FROM operations
         WHERE user_id = ?
         ORDER BY id ASC
@@ -194,7 +196,7 @@ def get_recent_operations(user_id: int, limit: int = 10):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT date, op_type, pair, lot, result, amount, balance_after, note
+        SELECT date, op_type, pair, lot, result, amount, balance_after, note, risk_pct
         FROM operations
         WHERE user_id = ?
         ORDER BY id DESC LIMIT ?
@@ -207,7 +209,7 @@ def get_last_trade(user_id: int):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, date, pair, lot, result, amount, balance_after, note
+        SELECT id, date, pair, lot, result, amount, balance_after, note, risk_pct
         FROM operations
         WHERE user_id = ? AND op_type = 'Сделка'
         ORDER BY id DESC LIMIT 1
