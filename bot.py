@@ -1,36 +1,31 @@
 import asyncio
+import io
 import logging
+import pandas as pd
 import os
-from dotenv import load_dotenv
+import openpyxl
 
-from aiogram import Bot, Dispatcher
-import asyncio
-import logging
-import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
-
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile
+from openpyxl.styles import PatternFill, Font
+from openpyxl.utils import get_column_letter
 
 from database import (
-    init_db, get_user_deposit, get_user_currency,
-    set_user_deposit_and_currency, log_balance_operation,
-    add_trade_operation, get_user_operations, get_recent_operations,
-    get_last_trade, delete_trade_by_id, reset_user_data, SQLiteFSMStorage
+    init_db, set_user_deposit_and_currency, get_user_deposit, get_user_currency,
+    log_balance_operation, add_trade_operation,
+    get_user_operations, get_recent_operations, get_last_trade, delete_trade_by_id,
+    get_user_pairs, reset_user_data, SQLiteFSMStorage
 )
-from states.fsm import DepositState, TradeState, StatsState
-from keyboards.inline import (
-    get_main_keyboard, get_history_keyboard, get_currency_keyboard,
-    get_pairs_keyboard, get_stats_keyboard, get_back_keyboard
-)
-from utils.analytics import calculate_advanced_stats
-from utils.excel import generate_excel_bytes
 
 load_dotenv()
+
 API_TOKEN = os.getenv("API_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
 if not API_TOKEN:
     raise ValueError("Не найден API_TOKEN в переменных окружения или файле .env!")
@@ -39,6 +34,89 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 storage = SQLiteFSMStorage()
 dp = Dispatcher(storage=storage)
+
+# Состояния FSM
+class DepositState(StatesGroup):
+    waiting_for_currency = State()
+    waiting_for_deposit = State()
+    waiting_for_top_up = State()
+    waiting_for_withdraw = State()
+
+class TradeState(StatesGroup):
+    waiting_for_pair = State()
+    waiting_for_lot = State()
+    waiting_for_profit = State()
+    waiting_for_risk = State()
+    waiting_for_note = State()
+    waiting_for_confirmation = State()
+
+class StatsState(StatesGroup):
+    waiting_for_custom_period = State()
+
+# --- Клавиатуры ---
+def get_main_keyboard(user_id: int):
+    keyboard = [
+        [types.InlineKeyboardButton(text="➕ Добавить сделку", callback_data="action_add_trade")],
+        [types.InlineKeyboardButton(text="📜 История сделок", callback_data="action_history")],
+        [types.InlineKeyboardButton(text="🟢 Пополнить депозит", callback_data="action_top_up"),
+         types.InlineKeyboardButton(text="🔴 Вывести с депозита", callback_data="action_withdraw")],
+        [types.InlineKeyboardButton(text="📊 Статистика", callback_data="action_stats"),
+         types.InlineKeyboardButton(text="📁 Скачать Excel", callback_data="action_excel")]
+    ]
+
+    # Кнопка бэкапа отображается ТОЛЬКО для администратора
+    row_admin = []
+    if user_id == ADMIN_ID:
+        row_admin.append(types.InlineKeyboardButton(text="💾 Резервная копия БД", callback_data="action_backup"))
+    row_admin.append(types.InlineKeyboardButton(text="🔄 Сброс данных", callback_data="action_reset"))
+
+    keyboard.append(row_admin)
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def get_history_keyboard(has_trades: bool):
+    keyboard = []
+    if has_trades:
+        keyboard.append([types.InlineKeyboardButton(text="🗑 Удалить последнюю сделку", callback_data="action_delete_last")])
+    keyboard.append([types.InlineKeyboardButton(text="◀️ В главное меню", callback_data="main_menu")])
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def get_currency_keyboard():
+    keyboard = [
+        [types.InlineKeyboardButton(text="💵 USD ($)", callback_data="curr_USD"),
+         types.InlineKeyboardButton(text="💶 EUR (€)", callback_data="curr_EUR")],
+        [types.InlineKeyboardButton(text="🪙 USDT", callback_data="curr_USDT")]
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def get_pairs_keyboard(user_id):
+    pairs = get_user_pairs(user_id)
+    keyboard = []
+    for p in pairs:
+        keyboard.append([types.InlineKeyboardButton(text=f"🔹 {p}", callback_data=f"sel_pair_{p}")])
+    keyboard.append([types.InlineKeyboardButton(text="✍️ Другая пара (ввести текстом)", callback_data="sel_pair_custom")])
+    keyboard.append([types.InlineKeyboardButton(text="◀️ Отмена", callback_data="main_menu")])
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def get_stats_keyboard(user_id):
+    pairs = get_user_pairs(user_id)
+    keyboard = [
+        [types.InlineKeyboardButton(text="📅 За день", callback_data="stats_day"),
+         types.InlineKeyboardButton(text="📆 За неделю", callback_data="stats_week")],
+        [types.InlineKeyboardButton(text="🗓 За месяц", callback_data="stats_month"),
+         types.InlineKeyboardButton(text="⏱ Произвольный период", callback_data="stats_custom")]
+    ]
+    if pairs:
+        pair_buttons = [types.InlineKeyboardButton(text=f"🔍 Пара: {p}", callback_data=f"stats_pair_{p}") for p in pairs]
+        keyboard.append(pair_buttons)
+
+    keyboard.append([types.InlineKeyboardButton(text="◀️ В главное меню", callback_data="main_menu")])
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def get_back_keyboard():
+    keyboard = [
+        [types.InlineKeyboardButton(text="◀️ Отмена / Меню", callback_data="main_menu")]
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 # --- Универсальное управление интерфейсом (строго 1 активное сообщение) ---
 async def update_interface(
@@ -99,7 +177,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         await state.set_state(DepositState.waiting_for_currency)
     else:
         text = f"🤖 **Главное меню**\n\nТекущий депозит: **{deposit:.2f} {curr}**\nВыберите действие:"
-        await update_interface(state, message, text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        await update_interface(state, message, text, reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "main_menu")
 async def process_main_menu(callback: types.CallbackQuery, state: FSMContext):
@@ -114,11 +192,15 @@ async def process_main_menu(callback: types.CallbackQuery, state: FSMContext):
         await state.set_state(DepositState.waiting_for_currency)
     else:
         text = f"🤖 **Главное меню**\n\nТекущий депозит: **{deposit:.2f} {curr}**\nВыберите действие:"
-        await update_interface(state, callback, text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        await update_interface(state, callback, text, reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
 
-# --- Резервная копия базы данных ---
+# --- Резервная копия базы данных (Только для администратора) ---
 @dp.callback_query(F.data == "action_backup")
 async def callback_backup(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⚠️ У вас нет доступа к этой функции.", show_alert=True)
+        return
+
     await callback.answer()
     db_path = os.path.join("data", "trading_bot.db")
     if os.path.exists(db_path):
@@ -126,7 +208,7 @@ async def callback_backup(callback: types.CallbackQuery, state: FSMContext):
         await update_interface(
             state, callback,
             "💾 **Резервная копия базы данных:**\n\nФайл актуальной базы данных успешно выгружен.",
-            reply_markup=get_main_keyboard(),
+            reply_markup=get_main_keyboard(callback.from_user.id),
             parse_mode="Markdown",
             document=document
         )
@@ -151,9 +233,10 @@ async def process_deposit(message: types.Message, state: FSMContext):
             return
         data = await state.get_data()
         curr = data.get("currency", "USD")
+        user_id = message.from_user.id
 
-        set_user_deposit_and_currency(message.from_user.id, deposit, curr, op_type="Старт", amount=deposit)
-        await update_interface(state, message, f"✅ Стартовый депозит успешно установлен: **{deposit:.2f} {curr}**", reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        set_user_deposit_and_currency(user_id, deposit, curr, op_type="Старт", amount=deposit)
+        await update_interface(state, message, f"✅ Стартовый депозит успешно установлен: **{deposit:.2f} {curr}**", reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
         await state.clear()
     except ValueError:
         await update_interface(state, message, "⚠️ Пожалуйста, введите корректное число для депозита.", parse_mode="Markdown")
@@ -175,7 +258,7 @@ async def process_top_up(message: types.Message, state: FSMContext):
         curr = get_user_currency(user_id)
         new_deposit = get_user_deposit(user_id) + amount
         log_balance_operation(user_id, "Пополнение", amount, new_deposit)
-        await update_interface(state, message, f"✅ Баланс успешно пополнен на **+{amount:.2f} {curr}**\n💰 Новый депозит: **{new_deposit:.2f} {curr}**", reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        await update_interface(state, message, f"✅ Баланс успешно пополнен на **+{amount:.2f} {curr}**\n💰 Новый депозит: **{new_deposit:.2f} {curr}**", reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
         await state.clear()
     except ValueError:
         await update_interface(state, message, "⚠️ Введите числовое значение.", reply_markup=get_back_keyboard(), parse_mode="Markdown")
@@ -203,7 +286,7 @@ async def process_withdraw(message: types.Message, state: FSMContext):
             return
         new_deposit = current_deposit - amount
         log_balance_operation(user_id, "Вывод", -amount, new_deposit)
-        await update_interface(state, message, f"✅ Успешно выведено: **-{amount:.2f} {curr}**\n💰 Новый депозит: **{new_deposit:.2f} {curr}**", reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        await update_interface(state, message, f"✅ Успешно выведено: **-{amount:.2f} {curr}**\n💰 Новый депозит: **{new_deposit:.2f} {curr}**", reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
         await state.clear()
     except ValueError:
         await update_interface(state, message, "⚠️ Введите числовое значение.", reply_markup=get_back_keyboard(), parse_mode="Markdown")
@@ -300,7 +383,7 @@ async def callback_confirm_delete(callback: types.CallbackQuery, state: FSMConte
     else:
         text = "⚠️ Не удалось найти или удалить указанную сделку."
 
-    await update_interface(state, callback, text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
+    await update_interface(state, callback, text, reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
 
 # --- Добавление сделки ---
 @dp.callback_query(F.data == "action_add_trade")
@@ -444,7 +527,7 @@ async def process_trade_confirm(callback: types.CallbackQuery, state: FSMContext
     add_trade_operation(user_id, pair, lot, result, profit_loss, new_deposit, note, risk_pct)
 
     text = f"✅ **Сделка сохранена!**\n🔹 Пара: `{pair}`\n💰 Баланс: `{new_deposit:.2f} {curr}`"
-    await update_interface(state, callback, text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
+    await update_interface(state, callback, text, reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
 
 # --- Статистика ---
 @dp.callback_query(F.data == "action_stats")
@@ -500,7 +583,7 @@ async def process_custom_period(message: types.Message, state: FSMContext):
         curr = get_user_currency(user_id)
         stats = calculate_advanced_stats(get_user_operations(user_id), lambda r: start_date <= datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S").date() <= end_date)
         text = f"📊 **Период:**\n\n📁 Сделок: `{stats['total']}`\n💰 Итог: `{stats['total_pl']:+.2f} {curr}`" if stats else "📊 Сделок не найдено."
-        await update_interface(state, message, text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        await update_interface(state, message, text, reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
         await state.clear()
     except Exception:
         await update_interface(state, message, "⚠️ Ошибка формата. Введите в формате `ДД.ММ.ГГГГ - ДД.ММ.ГГГГ`", reply_markup=get_back_keyboard(), parse_mode="Markdown")
@@ -509,13 +592,14 @@ async def process_custom_period(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "action_excel")
 async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
-    operations = get_user_operations(callback.from_user.id)
+    user_id = callback.from_user.id
+    operations = get_user_operations(user_id)
     if not operations:
-        await update_interface(state, callback, "⚠️ Нет данных для выгрузки.", reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        await update_interface(state, callback, "⚠️ Нет данных для выгрузки.", reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
         return
-    excel_bytes = generate_excel_bytes(operations, callback.from_user.id)
+    excel_bytes = generate_excel_bytes(operations, user_id)
     document = BufferedInputFile(excel_bytes, filename="trading_history.xlsx")
-    await update_interface(state, callback, "📁 **Ваш Excel-файл готов!**", reply_markup=get_main_keyboard(), parse_mode="Markdown", document=document)
+    await update_interface(state, callback, "📁 **Ваш Excel-файл готов!**", reply_markup=get_main_keyboard(user_id), parse_mode="Markdown", document=document)
 
 async def main():
     init_db()
