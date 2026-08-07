@@ -67,16 +67,10 @@ def generate_excel_bytes(operations, user_id) -> bytes:
         dt_obj = datetime.strptime(date_time_str, "%Y-%m-%d %H:%M:%S")
         sheet_name = f"{months_ru[dt_obj.month]} {dt_obj.year}"
 
-        # Четкое разделение типа операции для Excel (чтобы убыток не путался с выводом)
-        if op_type == "Сделка":
-            display_op_type = "Сделка (Плюс)" if result == "Win" else "Сделка (Минус)"
-        else:
-            display_op_type = op_type  # "Пополнение", "Вывод", "Старт"
-
         sheets_data[sheet_name].append({
             "Дата": dt_obj.strftime("%d.%m.%Y"),
             "Время": dt_obj.strftime("%H:%M:%S"),
-            "Тип операции": display_op_type,
+            "Тип операции": op_type,  # Теперь здесь просто "Сделка", "Пополнение", "Вывод" и т.д.
             "Торговая пара": pair if pair != "-" else "",
             "Лот": lot if lot > 0 else "",
             "Исход": ("Плюс" if result == "Win" else "Минус") if op_type == "Сделка" else "-",
