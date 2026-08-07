@@ -94,19 +94,20 @@ def init_db():
         )
     """)
 
+    # Таблица операций с поддержкой риска в процентах (risk_pct)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS operations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             date TEXT,
-            op_type TEXT,
-            pair TEXT,
-            lot REAL,
-            result TEXT,
-            amount REAL,
-            balance_after REAL,
-            note TEXT DEFAULT '',
-            risk_pct REAL DEFAULT 0.0,
+            op_type TEXT,          -- "Старт", "Пополнение", "Вывод", "Сделка"
+            pair TEXT,             -- Пара (для сделок)
+            lot REAL,              -- Лот (для сделок)
+            result TEXT,           -- "Win" / "Loss" (для сделок)
+            amount REAL,           -- Изменение суммы (+/-)
+            balance_after REAL,    -- Депозит после операции
+            note TEXT DEFAULT '',  -- Заметка к сделке
+            risk_pct REAL DEFAULT 0.0, -- Риск в % от депозита
             FOREIGN KEY (user_id) REFERENCES users (user_id)
         )
     """)
