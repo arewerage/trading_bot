@@ -55,14 +55,20 @@ class StatsState(StatesGroup):
 def get_main_keyboard():
     keyboard = [
         [types.InlineKeyboardButton(text="➕ Добавить сделку", callback_data="action_add_trade")],
-        [types.InlineKeyboardButton(text="📜 История сделок", callback_data="action_history"),
-         types.InlineKeyboardButton(text="↩️ Удалить последнюю", callback_data="action_delete_last")],
+        [types.InlineKeyboardButton(text="📜 История сделок", callback_data="action_history")],
         [types.InlineKeyboardButton(text="🟢 Пополнить депозит", callback_data="action_top_up"),
          types.InlineKeyboardButton(text="🔴 Вывести с депозита", callback_data="action_withdraw")],
         [types.InlineKeyboardButton(text="📊 Статистика", callback_data="action_stats"),
          types.InlineKeyboardButton(text="📁 Скачать Excel", callback_data="action_excel")],
         [types.InlineKeyboardButton(text="🔄 Сброс данных", callback_data="action_reset")]
     ]
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def get_history_keyboard(has_trades: bool):
+    keyboard = []
+    if has_trades:
+        keyboard.append([types.InlineKeyboardButton(text="🗑 Удалить последнюю сделку", callback_data="action_delete_last")])
+    keyboard.append([types.InlineKeyboardButton(text="◀️ В главное меню", callback_data="main_menu")])
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def get_currency_keyboard():
@@ -288,9 +294,13 @@ async def callback_history(callback: types.CallbackQuery, state: FSMContext):
         else:
             text += f"`{date}` | 🔹 *{op_type}*: `{amount:+.2f} {curr}`\n"
 
-    await update_interface(state, callback, text, reply_markup=get_back_keyboard(), parse_mode="Markdown")
+    # Проверяем, есть ли сделки для отображения кнопки удаления
+    last_trade = get_last_trade(user_id)
+    has_trades = last_trade is not None
 
-# --- Удаление последней сделки с предварительным просмотром ---
+    await update_interface(state, callback, text, reply_markup=get_history_keyboard(has_trades), parse_mode="Markdown")
+
+# --- Удаление последней сделки с предварительным просмотром из истории ---
 @dp.callback_query(F.data == "action_delete_last")
 async def callback_delete_last(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
@@ -307,7 +317,7 @@ async def callback_delete_last(callback: types.CallbackQuery, state: FSMContext)
     note_str = f"🔹 Заметка: _{note}_\n" if note else ""
     keyboard = [
         [types.InlineKeyboardButton(text="🗑 Да, удалить эту сделку", callback_data="confirm_delete_trade")],
-        [types.InlineKeyboardButton(text="◀️ Отмена", callback_data="main_menu")]
+        [types.InlineKeyboardButton(text="◀️ Назад к истории", callback_data="action_history")]
     ]
     text = (
         "⚠️ **Подтвердите удаление последней сделки:**\n\n"
