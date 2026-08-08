@@ -1,10 +1,12 @@
 import math
+from datetime import timedelta
 
 from aiogram import F, Router, types
 from aiogram.fsm.context import FSMContext
 
 from database import (
     delete_operation,
+    fmt_dt,
     get_active_account_id,
     get_operation,
     get_operations_page,
@@ -12,21 +14,39 @@ from database import (
     get_trades,
     get_user_currency,
     get_user_deposit,
+    get_user_tz_offset,
+    now_local,
     update_trade_amount,
+    update_trade_commission,
+    update_trade_date,
+    update_trade_lot,
     update_trade_note,
+    update_trade_pair,
     update_trade_risk,
+    update_trade_side,
 )
 from handlers.common import update_interface
 from keyboards.inline import (
     get_back_keyboard,
+    get_date_keyboard,
     get_del_ops_keyboard,
     get_edit_trade_keyboard,
     get_edit_trades_keyboard,
     get_history_keyboard,
     get_main_keyboard,
+    get_pairs_keyboard,
+    get_side_keyboard,
 )
 from states.fsm import TradeState
-from utils.validators import validate_amount, validate_note, validate_risk_percent
+from utils.validators import (
+    validate_amount,
+    validate_commission,
+    validate_lot,
+    validate_note,
+    validate_risk_percent,
+    validate_single_date,
+    validate_trading_pair,
+)
 
 router = Router()
 
@@ -252,11 +272,14 @@ async def callback_edit_trade(callback: types.CallbackQuery, state: FSMContext):
 
 
 async def render_edit_detail(event, state: FSMContext, trade, status: str = ""):
-    trade_id, date, pair, lot, side, result, amount, note, risk_pct = trade
+    trade_id, date, pair, lot, side, result, amount, note, risk_pct, commission = trade
     curr = get_user_currency(event.from_user.id)
     side_str = f" {side}" if side in ("Buy", "Sell") else ""
     note_str = f"📝 Заметка: _{note}_\n" if note else ""
     risk_str = f"🛡 Риск: `{risk_pct}%`\n" if risk_pct > 0 else ""
+    commission_str = (
+        f"💸 Комиссия: `{commission:.2f} {curr}` (учтена)\n" if commission > 0 else ""
+    )
     status_str = f"{status}\n\n" if status else ""
     text = (
         f"{status_str}✏️ **Редактирование сделки**\n\n"
@@ -264,7 +287,7 @@ async def render_edit_detail(event, state: FSMContext, trade, status: str = ""):
         f"🔹 Пара: `{pair}`\n🔹 Лот: `{lot}`{side_str}\n"
         f"🔹 Исход: `{'Плюс' if result == 'Win' else 'Минус'}`\n"
         f"🔹 Профит / Убыток: `{amount:+.2f} {curr}`\n"
-        f"{risk_str}{note_str}"
+        f"{commission_str}{risk_str}{note_str}"
     )
     await update_interface(
         state,
@@ -380,3 +403,203 @@ async def process_edit_risk(message: types.Message, state: FSMContext):
     account_id = get_active_account_id(user_id)
     update_trade_risk(account_id, trade_id, risk)
     await _refresh_edit_detail(message, state, "✅ Риск обновлён")
+
+
+# --- Дата ---
+@router.callback_query(F.data == "edit_field_date")
+async def callback_edit_date(callback: types.CallbackQuery, state: FSMContext):
+    text = "📅 Выберите новую дату сделки:"
+    await update_interface(
+        state,
+        callback,
+        text,
+        reply_markup=get_date_keyboard(prefix="editdate"),
+        parse_mode="Markdown",
+    )
+    await state.set_state(TradeState.edit_date)
+
+
+async def _apply_edit_date(event, state: FSMContext, date_str: str):
+    data = await state.get_data()
+    trade_id = data.get("edit_trade_id")
+    account_id = get_active_account_id(event.from_user.id)
+    update_trade_date(account_id, trade_id, date_str)
+    await _refresh_edit_detail(event, state, "✅ Дата обновлена")
+
+
+@router.callback_query(F.data.startswith("editdate_"), TradeState.edit_date)
+async def process_edit_date(callback: types.CallbackQuery, state: FSMContext):
+    if callback.data == "editdate_custom":
+        await update_interface(
+            state,
+            callback,
+            "✍️ Введите дату в формате `ДД.ММ.ГГГГ` (например, `05.01.2026`):",
+            reply_markup=get_back_keyboard(),
+            parse_mode="Markdown",
+        )
+        await state.set_state(TradeState.edit_date_custom)
+        return
+    tz = get_user_tz_offset(callback.from_user.id)
+    now = now_local(tz)
+    if callback.data == "editdate_today":
+        date_str = fmt_dt(now)
+    else:
+        date_str = fmt_dt(now - timedelta(days=1))
+    await _apply_edit_date(callback, state, date_str)
+
+
+@router.message(TradeState.edit_date_custom)
+async def process_edit_date_custom(message: types.Message, state: FSMContext):
+    d, error = validate_single_date(message.text)
+    if error:
+        await update_interface(
+            state,
+            message,
+            f"⚠️ {error}",
+            reply_markup=get_back_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+    date_str = f"{d.strftime('%Y-%m-%d')} 12:00:00"
+    await _apply_edit_date(message, state, date_str)
+
+
+# --- Пара ---
+@router.callback_query(F.data == "edit_field_pair")
+async def callback_edit_pair(callback: types.CallbackQuery, state: FSMContext):
+    account_id = get_active_account_id(callback.from_user.id)
+    text = "🔹 Выберите новую пару:"
+    await update_interface(
+        state,
+        callback,
+        text,
+        reply_markup=get_pairs_keyboard(account_id, prefix="editpair"),
+        parse_mode="Markdown",
+    )
+    await state.set_state(TradeState.edit_pair)
+
+
+async def _apply_edit_pair(event, state: FSMContext, pair: str):
+    data = await state.get_data()
+    trade_id = data.get("edit_trade_id")
+    account_id = get_active_account_id(event.from_user.id)
+    update_trade_pair(account_id, trade_id, pair)
+    await _refresh_edit_detail(event, state, "✅ Пара обновлена")
+
+
+@router.callback_query(F.data.startswith("editpair_"), TradeState.edit_pair)
+async def process_edit_pair(callback: types.CallbackQuery, state: FSMContext):
+    val = callback.data.replace("editpair_", "")
+    if val == "custom":
+        await update_interface(
+            state,
+            callback,
+            "✍️ Введите новую пару текстом (например, `EURUSD`):",
+            reply_markup=get_back_keyboard(),
+            parse_mode="Markdown",
+        )
+        await state.set_state(TradeState.edit_pair_custom)
+        return
+    await _apply_edit_pair(callback, state, val)
+
+
+@router.message(TradeState.edit_pair_custom)
+async def process_edit_pair_custom(message: types.Message, state: FSMContext):
+    pair, error = validate_trading_pair(message.text)
+    if error:
+        await update_interface(
+            state,
+            message,
+            f"⚠️ {error}",
+            reply_markup=get_back_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+    await _apply_edit_pair(message, state, pair)
+
+
+# --- Лот ---
+@router.callback_query(F.data == "edit_field_lot")
+async def callback_edit_lot(callback: types.CallbackQuery, state: FSMContext):
+    text = "📐 Введите новый объем лота (например, `0.1`):"
+    await update_interface(
+        state, callback, text, reply_markup=get_back_keyboard(), parse_mode="Markdown"
+    )
+    await state.set_state(TradeState.edit_lot)
+
+
+@router.message(TradeState.edit_lot)
+async def process_edit_lot(message: types.Message, state: FSMContext):
+    lot, warning_or_error = validate_lot(message.text)
+    if warning_or_error and not warning_or_error.startswith("⚠️ Предупреждение"):
+        await update_interface(
+            state,
+            message,
+            f"⚠️ {warning_or_error}",
+            reply_markup=get_back_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+    data = await state.get_data()
+    trade_id = data.get("edit_trade_id")
+    account_id = get_active_account_id(message.from_user.id)
+    update_trade_lot(account_id, trade_id, lot)
+    await _refresh_edit_detail(message, state, "✅ Лот обновлён")
+
+
+# --- Сторона ---
+@router.callback_query(F.data == "edit_field_side")
+async def callback_edit_side(callback: types.CallbackQuery, state: FSMContext):
+    text = "↔️ Выберите новое направление сделки:"
+    await update_interface(
+        state,
+        callback,
+        text,
+        reply_markup=get_side_keyboard(prefix="editside"),
+        parse_mode="Markdown",
+    )
+    await state.set_state(TradeState.edit_side)
+
+
+@router.callback_query(
+    F.data.in_({"editside_buy", "editside_sell"}), TradeState.edit_side
+)
+async def process_edit_side(callback: types.CallbackQuery, state: FSMContext):
+    side = "Buy" if callback.data == "editside_buy" else "Sell"
+    data = await state.get_data()
+    trade_id = data.get("edit_trade_id")
+    account_id = get_active_account_id(callback.from_user.id)
+    update_trade_side(account_id, trade_id, side)
+    await _refresh_edit_detail(callback, state, "✅ Сторона обновлена")
+
+
+# --- Комиссия ---
+@router.callback_query(F.data == "edit_field_commission")
+async def callback_edit_commission(callback: types.CallbackQuery, state: FSMContext):
+    text = (
+        "💸 Введите новую **комиссию** (например, `2` или `0` чтобы убрать).\n\n"
+        "*Сумма сделки будет пересчитана: брутто сохраняется, комиссия вычитается.*"
+    )
+    await update_interface(
+        state, callback, text, reply_markup=get_back_keyboard(), parse_mode="Markdown"
+    )
+    await state.set_state(TradeState.edit_commission)
+
+
+@router.message(TradeState.edit_commission)
+async def process_edit_commission(message: types.Message, state: FSMContext):
+    commission, error = validate_commission(message.text)
+    if error:
+        await update_interface(
+            state,
+            message,
+            f"⚠️ {error}",
+            reply_markup=get_back_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+    data = await state.get_data()
+    trade_id = data.get("edit_trade_id")
+    account_id = get_active_account_id(message.from_user.id)
+    update_trade_commission(account_id, trade_id, commission)
+    await _refresh_edit_detail(message, state, "✅ Комиссия обновлена")

@@ -25,6 +25,13 @@ class TradeState(StatesGroup):
     edit_amount = State()
     edit_note = State()
     edit_risk = State()
+    edit_date = State()
+    edit_date_custom = State()
+    edit_pair = State()
+    edit_pair_custom = State()
+    edit_lot = State()
+    edit_side = State()
+    edit_commission = State()
 
 
 class StatsState(StatesGroup):

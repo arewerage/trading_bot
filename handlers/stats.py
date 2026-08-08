@@ -11,9 +11,14 @@ from database import (
     now_local,
 )
 from handlers.common import update_interface
-from keyboards.inline import get_back_keyboard, get_main_keyboard, get_stats_keyboard
+from keyboards.inline import get_back_keyboard, get_stats_keyboard
 from states.fsm import StatsState
-from utils.analytics import calculate_advanced_stats, format_stats_text
+from utils.analytics import (
+    calculate_advanced_stats,
+    calculate_stats_by_pair,
+    format_stats_by_pair,
+    format_stats_text,
+)
 from utils.validators import validate_date_range
 
 router = Router()
@@ -107,6 +112,22 @@ async def callback_stats_pair(callback: types.CallbackQuery, state: FSMContext):
     )
 
 
+@router.callback_query(F.data == "stats_pairs")
+async def callback_stats_pairs(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    account_id = get_active_account_id(user_id)
+    curr = get_user_currency(user_id)
+    rows = calculate_stats_by_pair(get_operations(account_id))
+    text = format_stats_by_pair(rows, curr, "Статистика по парам")
+    await update_interface(
+        state,
+        callback,
+        text,
+        reply_markup=get_stats_keyboard(account_id),
+        parse_mode="Markdown",
+    )
+
+
 @router.callback_query(F.data == "stats_custom")
 async def callback_stats_custom(callback: types.CallbackQuery, state: FSMContext):
     await update_interface(
@@ -160,7 +181,7 @@ async def process_custom_period(message: types.Message, state: FSMContext):
         state,
         message,
         text,
-        reply_markup=get_main_keyboard(user_id),
+        reply_markup=get_stats_keyboard(account_id),
         parse_mode="Markdown",
     )
     await state.clear()

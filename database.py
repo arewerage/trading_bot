@@ -674,12 +674,12 @@ def get_operation(account_id: int, op_id: int):
 
 
 def get_trades(account_id: int):
-    """Сделки счёта (по убыванию id). (id, date, pair, lot, side, result, amount, note, risk_pct)."""
+    """Сделки счёта (по убыванию id). (id, date, pair, lot, side, result, amount, note, risk_pct, commission)."""
     conn = _connect()
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT id, date, pair, lot, side, result, amount, note, risk_pct
+        SELECT id, date, pair, lot, side, result, amount, note, risk_pct, commission
         FROM operations
         WHERE account_id = ? AND op_type = 'Сделка'
         ORDER BY id DESC
@@ -692,11 +692,12 @@ def get_trades(account_id: int):
 
 
 def get_trade(account_id: int, trade_id: int):
+    """Сделка. (id, date, pair, lot, side, result, amount, note, risk_pct, commission)."""
     conn = _connect()
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT id, date, pair, lot, side, result, amount, note, risk_pct
+        SELECT id, date, pair, lot, side, result, amount, note, risk_pct, commission
         FROM operations
         WHERE id = ? AND account_id = ? AND op_type = 'Сделка'
         """,
@@ -740,6 +741,74 @@ def update_trade_risk(account_id: int, trade_id: int, risk_pct: float):
     )
     conn.commit()
     conn.close()
+
+
+def update_trade_date(account_id: int, trade_id: int, date_str: str):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE operations SET date = ? WHERE id = ? AND account_id = ? AND op_type = 'Сделка'",
+        (date_str, trade_id, account_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_trade_pair(account_id: int, trade_id: int, pair: str):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE operations SET pair = ? WHERE id = ? AND account_id = ? AND op_type = 'Сделка'",
+        (pair, trade_id, account_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_trade_lot(account_id: int, trade_id: int, lot: float):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE operations SET lot = ? WHERE id = ? AND account_id = ? AND op_type = 'Сделка'",
+        (lot, trade_id, account_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_trade_side(account_id: int, trade_id: int, side: str):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE operations SET side = ? WHERE id = ? AND account_id = ? AND op_type = 'Сделка'",
+        (side, trade_id, account_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_trade_commission(account_id: int, trade_id: int, commission: float):
+    """Меняет комиссию и пересчитывает нетто-результат (брутто сохраняется)."""
+    conn = _connect()
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT amount, commission FROM operations WHERE id = ? AND account_id = ? AND op_type = 'Сделка'",
+        (trade_id, account_id),
+    ).fetchone()
+    if not row:
+        conn.close()
+        return
+    old_amount, old_commission = row
+    gross = (old_amount or 0.0) + (old_commission or 0.0)
+    new_amount = gross - commission
+    result = "Win" if new_amount >= 0 else "Loss"
+    cur.execute(
+        "UPDATE operations SET amount = ?, commission = ?, result = ? WHERE id = ? AND account_id = ? AND op_type = 'Сделка'",
+        (new_amount, commission, result, trade_id, account_id),
+    )
+    conn.commit()
+    conn.close()
+    recalc_account_balance(account_id)
 
 
 def delete_operation(account_id: int, op_id: int) -> bool:

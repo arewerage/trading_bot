@@ -15,11 +15,11 @@ from database import (
 )
 from handlers.common import update_interface
 from keyboards.inline import (
-    get_back_keyboard,
     get_date_keyboard,
     get_main_keyboard,
     get_pairs_keyboard,
     get_side_keyboard,
+    get_wizard_keyboard,
 )
 from states.fsm import TradeState
 from utils.validators import (
@@ -36,22 +36,241 @@ from utils.validators import (
 router = Router()
 
 
-# --- Добавление сделки ---
-@router.callback_query(F.data == "action_add_trade")
-async def callback_add_trade(callback: types.CallbackQuery, state: FSMContext):
-    if get_user_deposit(callback.from_user.id) <= 0:
-        await callback.answer("Сначала установите стартовый депозит!", show_alert=True)
-        return
-    account_id = get_active_account_id(callback.from_user.id)
+# ==================== Промпты шагов мастера ====================
+
+
+async def render_pair_prompt(event, state: FSMContext):
+    """Шаг 1: выбор пары. Обратно хода нет — это первый шаг."""
+    data = await state.get_data()
+    pair = data.get("pair", "")
     text = "Выберите торговую пару из списка или введите новую:"
+    if pair:
+        text += f"\n\nТекущая пара: `{pair}`"
+    account_id = get_active_account_id(event.from_user.id)
     await update_interface(
         state,
-        callback,
+        event,
         text,
         reply_markup=get_pairs_keyboard(account_id),
         parse_mode="Markdown",
     )
     await state.set_state(TradeState.waiting_for_pair)
+
+
+async def render_lot_prompt(event, state: FSMContext):
+    """Шаг 2: лот."""
+    data = await state.get_data()
+    lot = data.get("lot")
+    text = "Введите объем лота (например, `0.1`):"
+    if lot is not None:
+        text += f"\n\nТекущий лот: `{lot}`"
+    await update_interface(
+        state,
+        event,
+        text,
+        reply_markup=get_wizard_keyboard("pair"),
+        parse_mode="Markdown",
+    )
+    await state.set_state(TradeState.waiting_for_lot)
+
+
+async def render_side_prompt(event, state: FSMContext, extra: str = ""):
+    """Шаг 3: сторона."""
+    data = await state.get_data()
+    side = data.get("side")
+    text = "Выберите направление сделки:"
+    if side:
+        text += f"\n\nТекущее направление: `{side}`"
+    if extra:
+        text = f"{extra}\n\n" + text
+    await update_interface(
+        state,
+        event,
+        text,
+        reply_markup=get_side_keyboard(back_to="lot"),
+        parse_mode="Markdown",
+    )
+    await state.set_state(TradeState.waiting_for_side)
+
+
+async def render_profit_prompt(event, state: FSMContext):
+    """Шаг 4: сумма профита/убытка."""
+    data = await state.get_data()
+    curr = get_user_currency(event.from_user.id)
+    profit = data.get("profit_loss")
+    text = (
+        f"Введите сумму профита или убытка в {curr}\n"
+        "*(для прибыли укажите число без знака или с плюсом, для убытка — со знаком "
+        "минус, например: `50` или `-20`)*:"
+    )
+    if profit is not None:
+        text += f"\n\nТекущее значение: `{profit:+.2f}`"
+    await update_interface(
+        state,
+        event,
+        text,
+        reply_markup=get_wizard_keyboard("side"),
+        parse_mode="Markdown",
+    )
+    await state.set_state(TradeState.waiting_for_profit)
+
+
+async def render_commission_prompt(event, state: FSMContext):
+    """Шаг 5: комиссия (опционально)."""
+    data = await state.get_data()
+    commission = data.get("commission")
+    keyboard = [
+        [
+            types.InlineKeyboardButton(
+                text="⏩ Пропустить комиссию", callback_data="skip_commission"
+            )
+        ],
+        [
+            types.InlineKeyboardButton(
+                text="◀️ Назад", callback_data="wb_profit"
+            ),
+            types.InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu"),
+        ],
+    ]
+    text = (
+        "💸 Введите **комиссию по сделке** (опционально).\n\n"
+        "*Комиссия будет вычтена из указанной суммы.* Например: `2` или `0.5`:"
+    )
+    if commission is not None:
+        text += f"\n\nТекущая комиссия: `{commission:g}`"
+    await update_interface(
+        state,
+        event,
+        text,
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=keyboard),
+        parse_mode="Markdown",
+    )
+    await state.set_state(TradeState.waiting_for_commission)
+
+
+async def render_risk_prompt(event, state: FSMContext):
+    """Шаг 6: риск (опционально)."""
+    data = await state.get_data()
+    risk = data.get("risk_pct")
+    keyboard = [
+        [
+            types.InlineKeyboardButton(
+                text="⏩ Пропустить риск", callback_data="skip_risk"
+            )
+        ],
+        [
+            types.InlineKeyboardButton(
+                text="◀️ Назад", callback_data="wb_commission"
+            ),
+            types.InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu"),
+        ],
+    ]
+    text = (
+        "🛡️ Введите **планируемый риск на сделку в % от депозита** "
+        "(опционально, например `1` или `1.5`):"
+    )
+    if risk is not None:
+        text += f"\n\nТекущий риск: `{risk}%`"
+    await update_interface(
+        state,
+        event,
+        text,
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=keyboard),
+        parse_mode="Markdown",
+    )
+    await state.set_state(TradeState.waiting_for_risk)
+
+
+async def render_note_prompt(event, state: FSMContext):
+    """Шаг 7: заметка (опционально)."""
+    data = await state.get_data()
+    note = data.get("note")
+    keyboard = [
+        [
+            types.InlineKeyboardButton(
+                text="⏩ Пропустить заметку", callback_data="skip_note"
+            )
+        ],
+        [
+            types.InlineKeyboardButton(
+                text="◀️ Назад", callback_data="wb_risk"
+            ),
+            types.InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu"),
+        ],
+    ]
+    text = "✍️ Введите **заметку к сделке** (опционально):\n\nИли нажмите кнопку пропустить:"
+    if note:
+        text += f"\n\nТекущая заметка: _{note}_"
+    await update_interface(
+        state,
+        event,
+        text,
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=keyboard),
+        parse_mode="Markdown",
+    )
+    await state.set_state(TradeState.waiting_for_note)
+
+
+async def render_date_prompt(event, state: FSMContext):
+    """Шаг 8: дата."""
+    data = await state.get_data()
+    date_str = data.get("date")
+    text = "📅 Укажите **дату сделки**:"
+    if date_str:
+        date_short = f"{date_str[8:10]}.{date_str[5:7]}.{date_str[0:4]}"
+        text += f"\n\nТекущая дата: `{date_short}`"
+    await update_interface(
+        state,
+        event,
+        text,
+        reply_markup=get_date_keyboard(back_to="note"),
+        parse_mode="Markdown",
+    )
+    await state.set_state(TradeState.waiting_for_date)
+
+
+async def render_custom_date_prompt(event, state: FSMContext):
+    text = "✍️ Введите дату в формате `ДД.ММ.ГГГГ` (например, `05.01.2026`):"
+    await update_interface(
+        state,
+        event,
+        text,
+        reply_markup=get_wizard_keyboard("date"),
+        parse_mode="Markdown",
+    )
+    await state.set_state(TradeState.waiting_for_custom_date)
+
+
+# ==================== Навигация «Назад» в мастере ====================
+
+_BACK_HANDLERS = {
+    "wb_pair": render_pair_prompt,
+    "wb_lot": render_lot_prompt,
+    "wb_side": render_side_prompt,
+    "wb_profit": render_profit_prompt,
+    "wb_commission": render_commission_prompt,
+    "wb_risk": render_risk_prompt,
+    "wb_note": render_note_prompt,
+    "wb_date": render_date_prompt,
+}
+
+
+@router.callback_query(F.data.startswith("wb_"))
+async def wizard_back(callback: types.CallbackQuery, state: FSMContext):
+    render = _BACK_HANDLERS.get(callback.data)
+    if render:
+        await render(callback, state)
+
+
+# ==================== Добавление сделки ====================
+
+
+@router.callback_query(F.data == "action_add_trade")
+async def callback_add_trade(callback: types.CallbackQuery, state: FSMContext):
+    if get_user_deposit(callback.from_user.id) <= 0:
+        await callback.answer("Сначала установите стартовый депозит!", show_alert=True)
+        return
+    await render_pair_prompt(callback, state)
 
 
 @router.callback_query(F.data.startswith("sel_pair_"), TradeState.waiting_for_pair)
@@ -63,20 +282,13 @@ async def process_pair_callback(callback: types.CallbackQuery, state: FSMContext
             state,
             callback,
             text,
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_wizard_keyboard(),
             parse_mode="Markdown",
         )
-    else:
-        await state.update_data(pair=val)
-        text = f"Выбрана пара: `{val}`\n\nВведите объем лота (например, `0.1`):"
-        await update_interface(
-            state,
-            callback,
-            text,
-            reply_markup=get_back_keyboard(),
-            parse_mode="Markdown",
-        )
-        await state.set_state(TradeState.waiting_for_lot)
+        await state.set_state(TradeState.waiting_for_pair)
+        return
+    await state.update_data(pair=val)
+    await render_lot_prompt(callback, state)
 
 
 @router.message(TradeState.waiting_for_pair)
@@ -87,16 +299,12 @@ async def process_pair_text(message: types.Message, state: FSMContext):
             state,
             message,
             f"⚠️ {error}",
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_wizard_keyboard(),
             parse_mode="Markdown",
         )
         return
     await state.update_data(pair=pair)
-    text = f"Выбрана пара: `{pair}`\n\nВведите объем лота (например, `0.1`):"
-    await update_interface(
-        state, message, text, reply_markup=get_back_keyboard(), parse_mode="Markdown"
-    )
-    await state.set_state(TradeState.waiting_for_lot)
+    await render_lot_prompt(message, state)
 
 
 @router.message(TradeState.waiting_for_lot)
@@ -107,34 +315,20 @@ async def process_lot(message: types.Message, state: FSMContext):
             state,
             message,
             f"⚠️ {warning_or_error}",
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_wizard_keyboard("pair"),
             parse_mode="Markdown",
         )
         return
     await state.update_data(lot=lot)
-    text = "Выберите направление сделки:"
-    if warning_or_error and warning_or_error.startswith("⚠️ Предупреждение"):
-        text = f"{warning_or_error}\n\n" + text
-    await update_interface(
-        state, message, text, reply_markup=get_side_keyboard(), parse_mode="Markdown"
-    )
-    await state.set_state(TradeState.waiting_for_side)
+    extra = warning_or_error if warning_or_error and warning_or_error.startswith("⚠️ Предупреждение") else ""
+    await render_side_prompt(message, state, extra=extra)
 
 
 @router.callback_query(F.data.in_({"side_buy", "side_sell"}), TradeState.waiting_for_side)
 async def process_side(callback: types.CallbackQuery, state: FSMContext):
     side = "Buy" if callback.data == "side_buy" else "Sell"
     await state.update_data(side=side)
-    curr = get_user_currency(callback.from_user.id)
-    text = f"Направление: `{side}`\n\nВведите сумму профита или убытка в {curr}\n*(для прибыли укажите число без знака или с плюсом, для убытка — со знаком минус, например: `50` или `-20`)*:"
-    await update_interface(
-        state,
-        callback,
-        text,
-        reply_markup=get_back_keyboard(),
-        parse_mode="Markdown",
-    )
-    await state.set_state(TradeState.waiting_for_profit)
+    await render_profit_prompt(callback, state)
 
 
 @router.message(TradeState.waiting_for_profit)
@@ -145,28 +339,12 @@ async def process_profit(message: types.Message, state: FSMContext):
             state,
             message,
             f"⚠️ {error}",
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_wizard_keyboard("side"),
             parse_mode="Markdown",
         )
         return
     await state.update_data(profit_loss=amount)
-    keyboard = [
-        [
-            types.InlineKeyboardButton(
-                text="⏩ Пропустить комиссию", callback_data="skip_commission"
-            )
-        ],
-        [types.InlineKeyboardButton(text="◀️ Отмена", callback_data="main_menu")],
-    ]
-    text = "💸 Введите **комиссию по сделке** (опционально).\n\n*Комиссия будет вычтена из указанной суммы.* Например: `2` или `0.5`:"
-    await update_interface(
-        state,
-        message,
-        text,
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=keyboard),
-        parse_mode="Markdown",
-    )
-    await state.set_state(TradeState.waiting_for_commission)
+    await render_commission_prompt(message, state)
 
 
 @router.message(TradeState.waiting_for_commission)
@@ -177,38 +355,18 @@ async def process_commission_text(message: types.Message, state: FSMContext):
             state,
             message,
             f"⚠️ {error}",
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_wizard_keyboard("profit"),
             parse_mode="Markdown",
         )
         return
     await state.update_data(commission=commission)
-    await prompt_for_risk(message, state)
+    await render_risk_prompt(message, state)
 
 
 @router.callback_query(F.data == "skip_commission", TradeState.waiting_for_commission)
 async def process_commission_skip(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(commission=0.0)
-    await prompt_for_risk(callback, state)
-
-
-async def prompt_for_risk(event, state: FSMContext):
-    keyboard = [
-        [
-            types.InlineKeyboardButton(
-                text="⏩ Пропустить риск", callback_data="skip_risk"
-            )
-        ],
-        [types.InlineKeyboardButton(text="◀️ Отмена", callback_data="main_menu")],
-    ]
-    text = "🛡️ Введите **планируемый риск на сделку в % от депозита** (опционально, например `1` или `1.5`):"
-    await update_interface(
-        state,
-        event,
-        text,
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=keyboard),
-        parse_mode="Markdown",
-    )
-    await state.set_state(TradeState.waiting_for_risk)
+    await render_risk_prompt(callback, state)
 
 
 @router.message(TradeState.waiting_for_risk)
@@ -219,38 +377,18 @@ async def process_risk_text(message: types.Message, state: FSMContext):
             state,
             message,
             f"⚠️ {error}",
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_wizard_keyboard("commission"),
             parse_mode="Markdown",
         )
         return
     await state.update_data(risk_pct=risk)
-    await prompt_for_note(message, state)
+    await render_note_prompt(message, state)
 
 
 @router.callback_query(F.data == "skip_risk", TradeState.waiting_for_risk)
 async def process_risk_skip(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(risk_pct=0.0)
-    await prompt_for_note(callback, state)
-
-
-async def prompt_for_note(event, state: FSMContext):
-    keyboard = [
-        [
-            types.InlineKeyboardButton(
-                text="⏩ Пропустить заметку", callback_data="skip_note"
-            )
-        ],
-        [types.InlineKeyboardButton(text="◀️ Отмена", callback_data="main_menu")],
-    ]
-    text = "✍️ Введите **заметку к сделке** (опционально):\n\nИли нажмите кнопку пропустить:"
-    await update_interface(
-        state,
-        event,
-        text,
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=keyboard),
-        parse_mode="Markdown",
-    )
-    await state.set_state(TradeState.waiting_for_note)
+    await render_note_prompt(callback, state)
 
 
 @router.message(TradeState.waiting_for_note)
@@ -261,26 +399,18 @@ async def process_note_text(message: types.Message, state: FSMContext):
             state,
             message,
             f"⚠️ {error}",
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_wizard_keyboard("risk"),
             parse_mode="Markdown",
         )
         return
     await state.update_data(note=note)
-    await prompt_for_date(message, state)
+    await render_date_prompt(message, state)
 
 
 @router.callback_query(F.data == "skip_note", TradeState.waiting_for_note)
 async def process_note_skip(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(note="")
-    await prompt_for_date(callback, state)
-
-
-async def prompt_for_date(event, state: FSMContext):
-    text = "📅 Укажите **дату сделки**:"
-    await update_interface(
-        state, event, text, reply_markup=get_date_keyboard(), parse_mode="Markdown"
-    )
-    await state.set_state(TradeState.waiting_for_date)
+    await render_date_prompt(callback, state)
 
 
 @router.callback_query(F.data.startswith("opdate_"), TradeState.waiting_for_date)
@@ -292,15 +422,7 @@ async def process_date(callback: types.CallbackQuery, state: FSMContext):
     elif callback.data == "opdate_yesterday":
         date_str = fmt_dt(now - timedelta(days=1))
     else:
-        text = "✍️ Введите дату в формате `ДД.ММ.ГГГГ` (например, `05.01.2026`):"
-        await update_interface(
-            state,
-            callback,
-            text,
-            reply_markup=get_back_keyboard(),
-            parse_mode="Markdown",
-        )
-        await state.set_state(TradeState.waiting_for_custom_date)
+        await render_custom_date_prompt(callback, state)
         return
     await state.update_data(date=date_str)
     await show_trade_confirmation(callback, state)
@@ -314,7 +436,7 @@ async def process_custom_date(message: types.Message, state: FSMContext):
             state,
             message,
             f"⚠️ {error}",
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_wizard_keyboard("date"),
             parse_mode="Markdown",
         )
         return
@@ -346,7 +468,10 @@ async def show_trade_confirmation(event, state: FSMContext):
                 text="✅ Подтвердить и сохранить", callback_data="trade_confirm"
             )
         ],
-        [types.InlineKeyboardButton(text="❌ Отмена", callback_data="main_menu")],
+        [
+            types.InlineKeyboardButton(text="✏️ Изменить", callback_data="wb_date"),
+            types.InlineKeyboardButton(text="❌ Отмена", callback_data="main_menu"),
+        ],
     ]
     risk_str = f"🔹 Риск: `{risk_pct}%`\n" if risk_pct > 0 else ""
     note_str = f"🔹 Заметка: `{note}`\n" if note else ""

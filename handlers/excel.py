@@ -4,7 +4,7 @@ from aiogram.types import BufferedInputFile
 
 from database import get_user_operations
 from handlers.common import update_interface
-from keyboards.inline import get_main_keyboard
+from keyboards.inline import get_analytics_keyboard
 from utils.excel import generate_excel_bytes
 
 router = Router()
@@ -20,7 +20,7 @@ async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
             state,
             callback,
             "⚠️ Нет данных для выгрузки.",
-            reply_markup=get_main_keyboard(user_id),
+            reply_markup=get_analytics_keyboard(),
             parse_mode="Markdown",
         )
         return
@@ -30,7 +30,7 @@ async def callback_excel(callback: types.CallbackQuery, state: FSMContext):
         state,
         callback,
         "📁 **Ваш Excel-файл готов!**",
-        reply_markup=get_main_keyboard(user_id),
+        reply_markup=get_analytics_keyboard(),
         parse_mode="Markdown",
         document=document,
     )

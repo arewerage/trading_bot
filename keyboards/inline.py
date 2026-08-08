@@ -27,6 +27,22 @@ def _nav_row(current: int, total: int, per_page: int, prefix: str):
     return row
 
 
+def _back_button(back_to: str):
+    """Кнопка «Назад» в мастере: возвращает к шагу back_to."""
+    return types.InlineKeyboardButton(
+        text="◀️ Назад", callback_data=f"wb_{back_to}"
+    )
+
+
+def get_wizard_keyboard(back_to: str | None = None):
+    """Клавиатура шага мастера: [◀️ Назад] [🏠 Меню]."""
+    row = []
+    if back_to:
+        row.append(_back_button(back_to))
+    row.append(types.InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu"))
+    return types.InlineKeyboardMarkup(inline_keyboard=[row])
+
+
 # --- Главное меню ---
 def get_main_keyboard(user_id: int):
     keyboard = [
@@ -42,37 +58,70 @@ def get_main_keyboard(user_id: int):
         ],
         [
             types.InlineKeyboardButton(
-                text="🟢 Пополнить депозит", callback_data="action_top_up"
+                text="🟢 Пополнение", callback_data="action_top_up"
             ),
             types.InlineKeyboardButton(
-                text="🔴 Вывести с депозита", callback_data="action_withdraw"
+                text="🔴 Вывод", callback_data="action_withdraw"
             ),
         ],
+        [
+            types.InlineKeyboardButton(text="📊 Аналитика", callback_data="action_analytics")
+        ],
+        [
+            types.InlineKeyboardButton(text="💼 Счета", callback_data="action_accounts"),
+            types.InlineKeyboardButton(text="⚙️ Настройки", callback_data="action_settings"),
+        ],
+        [
+            types.InlineKeyboardButton(text="🗂 Данные", callback_data="action_data")
+        ],
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+# --- Подменю «Аналитика» ---
+def get_analytics_keyboard():
+    keyboard = [
         [
             types.InlineKeyboardButton(text="📊 Статистика", callback_data="action_stats"),
             types.InlineKeyboardButton(text="📈 График баланса", callback_data="action_chart"),
         ],
         [
             types.InlineKeyboardButton(text="📁 Скачать Excel", callback_data="action_excel"),
-            types.InlineKeyboardButton(text="📥 Импорт истории", callback_data="action_import"),
         ],
         [
-            types.InlineKeyboardButton(text="💼 Счета", callback_data="action_accounts"),
-            types.InlineKeyboardButton(text="⚙️ Настройки", callback_data="action_settings"),
+            types.InlineKeyboardButton(text="◀️ В главное меню", callback_data="main_menu"),
         ],
     ]
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-    row_admin = []
-    if user_id == ADMIN_ID:
-        row_admin.append(
+
+# --- Подменю «Данные» ---
+def get_data_keyboard(user_id: int):
+    keyboard = [
+        [
             types.InlineKeyboardButton(
-                text="💾 Резервная копия БД", callback_data="action_backup"
-            )
+                text="📥 Импорт истории", callback_data="action_import"
+            ),
+        ],
+    ]
+    if user_id == ADMIN_ID:
+        keyboard.append(
+            [
+                types.InlineKeyboardButton(
+                    text="💾 Резервная копия БД", callback_data="action_backup"
+                )
+            ]
         )
-    row_admin.append(
-        types.InlineKeyboardButton(text="🔄 Сброс данных", callback_data="action_reset")
+    keyboard.append(
+        [
+            types.InlineKeyboardButton(text="🔄 Сброс данных", callback_data="action_reset"),
+        ]
     )
-    keyboard.append(row_admin)
+    keyboard.append(
+        [
+            types.InlineKeyboardButton(text="◀️ В главное меню", callback_data="main_menu"),
+        ]
+    )
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
@@ -163,8 +212,21 @@ def get_edit_trade_keyboard(trade_id: int):
     keyboard = [
         [
             types.InlineKeyboardButton(
+                text="📅 Дата", callback_data="edit_field_date"
+            ),
+            types.InlineKeyboardButton(text="🔹 Пара", callback_data="edit_field_pair"),
+        ],
+        [
+            types.InlineKeyboardButton(text="📐 Лот", callback_data="edit_field_lot"),
+            types.InlineKeyboardButton(text="↔️ Сторона", callback_data="edit_field_side"),
+        ],
+        [
+            types.InlineKeyboardButton(
                 text="💰 Сумма / исход", callback_data="edit_field_amount"
-            )
+            ),
+            types.InlineKeyboardButton(
+                text="💸 Комиссия", callback_data="edit_field_commission"
+            ),
         ],
         [
             types.InlineKeyboardButton(
@@ -175,7 +237,7 @@ def get_edit_trade_keyboard(trade_id: int):
         [
             types.InlineKeyboardButton(
                 text="◀️ К списку сделок", callback_data="edit_trade_menu"
-            )
+            ),
         ],
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -280,50 +342,60 @@ def get_currency_keyboard():
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_pairs_keyboard(account_id: int):
+def get_pairs_keyboard(account_id: int, prefix: str = "sel_pair", back_to: str | None = None):
     pairs = get_user_pairs(account_id)
     keyboard = []
     for p in pairs:
         keyboard.append(
-            [types.InlineKeyboardButton(text=f"🔹 {p}", callback_data=f"sel_pair_{p}")]
+            [types.InlineKeyboardButton(text=f"🔹 {p}", callback_data=f"{prefix}_{p}")]
         )
     keyboard.append(
         [
             types.InlineKeyboardButton(
-                text="✍️ Другая пара (ввести текстом)", callback_data="sel_pair_custom"
+                text="✍️ Другая пара (ввести текстом)", callback_data=f"{prefix}_custom"
             )
         ]
     )
-    keyboard.append(
-        [types.InlineKeyboardButton(text="◀️ Отмена", callback_data="main_menu")]
-    )
+    row = []
+    if back_to:
+        row.append(_back_button(back_to))
+    row.append(types.InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu"))
+    keyboard.append(row)
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_side_keyboard():
+def get_side_keyboard(prefix: str = "side", back_to: str | None = None):
     keyboard = [
         [
-            types.InlineKeyboardButton(text="🟢 Buy", callback_data="side_buy"),
-            types.InlineKeyboardButton(text="🔴 Sell", callback_data="side_sell"),
+            types.InlineKeyboardButton(text="🟢 Buy", callback_data=f"{prefix}_buy"),
+            types.InlineKeyboardButton(text="🔴 Sell", callback_data=f"{prefix}_sell"),
         ],
-        [types.InlineKeyboardButton(text="◀️ Отмена", callback_data="main_menu")],
     ]
+    row = []
+    if back_to:
+        row.append(_back_button(back_to))
+    row.append(types.InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu"))
+    keyboard.append(row)
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_date_keyboard():
+def get_date_keyboard(prefix: str = "opdate", back_to: str | None = None):
     keyboard = [
         [
-            types.InlineKeyboardButton(text="📅 Сегодня", callback_data="opdate_today"),
-            types.InlineKeyboardButton(text="↩️ Вчера", callback_data="opdate_yesterday"),
+            types.InlineKeyboardButton(text="📅 Сегодня", callback_data=f"{prefix}_today"),
+            types.InlineKeyboardButton(text="↩️ Вчера", callback_data=f"{prefix}_yesterday"),
         ],
         [
             types.InlineKeyboardButton(
-                text="✍️ Своя дата (ДД.ММ.ГГГГ)", callback_data="opdate_custom"
+                text="✍️ Своя дата (ДД.ММ.ГГГГ)", callback_data=f"{prefix}_custom"
             )
         ],
-        [types.InlineKeyboardButton(text="◀️ Отмена", callback_data="main_menu")],
     ]
+    row = []
+    if back_to:
+        row.append(_back_button(back_to))
+    row.append(types.InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu"))
+    keyboard.append(row)
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
@@ -353,8 +425,25 @@ def get_stats_keyboard(account_id: int):
         ]
         keyboard.append(pair_buttons)
     keyboard.append(
-        [types.InlineKeyboardButton(text="◀️ В главное меню", callback_data="main_menu")]
+        [types.InlineKeyboardButton(text="📊 По парам", callback_data="stats_pairs")]
     )
+    keyboard.append(
+        [types.InlineKeyboardButton(text="◀️ В аналитику", callback_data="action_analytics")]
+    )
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_chart_keyboard():
+    keyboard = [
+        [
+            types.InlineKeyboardButton(text="🌐 Всё", callback_data="chart_all"),
+            types.InlineKeyboardButton(text="🗓 Месяц", callback_data="chart_month"),
+            types.InlineKeyboardButton(text="📆 Неделя", callback_data="chart_week"),
+        ],
+        [
+            types.InlineKeyboardButton(text="◀️ В аналитику", callback_data="action_analytics"),
+        ],
+    ]
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
