@@ -27,10 +27,6 @@ def _day_filter(dt: datetime, now: datetime):
     return dt.date() == now.date()
 
 
-def _week_filter(dt: datetime, now: datetime):
-    return dt >= now - timedelta(days=7)
-
-
 def _month_filter(dt: datetime, now: datetime):
     return dt.year == now.year and dt.month == now.month
 
@@ -63,9 +59,9 @@ async def callback_stats_period(callback: types.CallbackQuery, state: FSMContext
         date_str = now.strftime("%d.%m.%Y")
     elif callback.data == "stats_week":
         label = "неделю"
-        start = now - timedelta(days=7)
-        f_func = lambda r, _now=now: _week_filter(_parse_dt(r[0]), _now)
-        date_str = f"{start.strftime('%d.%m.%Y')} — {now.strftime('%d.%m.%Y')}"
+        start_date = now.date() - timedelta(days=6)
+        f_func = lambda r, _start=start_date: _parse_dt(r[0]).date() >= _start
+        date_str = f"{start_date.strftime('%d.%m.%Y')} — {now.strftime('%d.%m.%Y')}"
     elif callback.data == "stats_month":
         label = "месяц"
         f_func = lambda r, _now=now: _month_filter(_parse_dt(r[0]), _now)
