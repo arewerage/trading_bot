@@ -10,6 +10,7 @@ async def update_interface(
     reply_markup=None,
     parse_mode="Markdown",
     document=None,
+    photo=None,
 ):
     if isinstance(event, types.CallbackQuery):
         await event.answer()
@@ -26,7 +27,7 @@ async def update_interface(
     data = await state.get_data()
     old_msg_id = data.get("bot_msg_id")
 
-    if isinstance(event, types.CallbackQuery) and not document:
+    if isinstance(event, types.CallbackQuery) and not document and not photo:
         try:
             await event.message.edit_text(
                 text, reply_markup=reply_markup, parse_mode=parse_mode
@@ -46,6 +47,14 @@ async def update_interface(
         msg = await bot_instance.send_document(
             chat_id=chat_id,
             document=document,
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+    elif photo:
+        msg = await bot_instance.send_photo(
+            chat_id=chat_id,
+            photo=photo,
             caption=text,
             reply_markup=reply_markup,
             parse_mode=parse_mode,

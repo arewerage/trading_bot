@@ -5,13 +5,19 @@ import pandas as pd
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from database import get_user_deposit
+from database import get_user_currency
 
 
 def generate_excel_bytes(operations, user_id) -> bytes:
     from collections import defaultdict
 
-    sheets_data = defaultdict(list)
+    curr = get_user_currency(user_id)
+    sym = {"USD": "$", "EUR": "€", "USDT": "USDT"}.get(curr, "$")
+    amount_col = f"Сумма операции ({curr})"
+    balance_col = f"Конечный депозит ({curr})"
+    commission_col = "Комиссия"
+    money_fmt = f'"{sym}"#,##0.00'
+
     months_ru = {
         1: "Январь",
         2: "Февраль",
@@ -65,23 +71,23 @@ def generate_excel_bytes(operations, user_id) -> bytes:
         if dd > max_dd:
             max_dd = dd
 
-    current_deposit = get_user_deposit(user_id)
-
+    current_balance = operations[-1][6] if operations else 0.0
     summary_rows = [
-        {"Показатель": "Текущий баланс", "Значение": current_deposit},
+        {"Показатель": "Текущий баланс", "Значение": current_balance},
         {"Показатель": "Всего сделок", "Значение": total_trades},
         {"Показатель": "Прибыльных сделок", "Значение": wins},
         {"Показатель": "Убыточных сделок", "Значение": losses},
         {"Показатель": "Винрейт", "Значение": winrate},
-        {"Показатель": "Общий результат ($)", "Значение": total_pl},
+        {"Показатель": f"Общий результат ({curr})", "Значение": total_pl},
         {"Показатель": "Профит-фактор", "Значение": profit_factor},
-        {"Показатель": "Максимальная просадка ($)", "Значение": max_dd},
+        {"Показатель": f"Максимальная просадка ({curr})", "Значение": max_dd},
         {"Показатель": "Макс. серия побед", "Значение": max_win_streak},
         {"Показатель": "Макс. серия поражений", "Значение": max_loss_streak},
     ]
 
     monthly_stats = defaultdict(lambda: {"total": 0, "wins": 0, "losses": 0, "pl": 0.0})
     pair_stats = defaultdict(lambda: {"total": 0, "wins": 0, "losses": 0, "pl": 0.0})
+    sheets_data = defaultdict(list)
 
     for row in operations:
         (
@@ -94,6 +100,9 @@ def generate_excel_bytes(operations, user_id) -> bytes:
             balance_after,
             note,
             risk_pct,
+            side,
+            commission,
+            _id,
         ) = row
         dt_obj = datetime.strptime(date_time_str, "%Y-%m-%d %H:%M:%S")
         sheet_name = f"{months_ru[dt_obj.month]} {dt_obj.year}"
@@ -102,15 +111,17 @@ def generate_excel_bytes(operations, user_id) -> bytes:
             {
                 "Дата": dt_obj.strftime("%d.%m.%Y"),
                 "Время": dt_obj.strftime("%H:%M:%S"),
-                "Тип операции": op_type,  # Теперь здесь просто "Сделка", "Пополнение", "Вывод" и т.д.
+                "Тип операции": op_type,
                 "Торговая пара": pair if pair != "-" else "",
                 "Лот": lot if lot > 0 else "",
+                "Направление": side if side in ("Buy", "Sell") else "",
                 "Исход": ("Плюс" if result == "Win" else "Минус")
                 if op_type == "Сделка"
                 else "-",
                 "Риск (%)": risk_pct if risk_pct > 0 else "",
-                "Сумма операции ($)": amount,
-                "Конечный депозит ($)": balance_after,
+                commission_col: commission if commission > 0 else "",
+                amount_col: amount,
+                balance_col: balance_after,
                 "Заметка": note if note else "",
             }
         )
@@ -138,7 +149,7 @@ def generate_excel_bytes(operations, user_id) -> bytes:
                 "Плюсы": s["wins"],
                 "Минусы": s["losses"],
                 "Винрейт": wr,
-                "Итог ($)": s["pl"],
+                f"Итог ({curr})": s["pl"],
             }
         )
 
@@ -152,7 +163,7 @@ def generate_excel_bytes(operations, user_id) -> bytes:
                 "Плюсы": s["wins"],
                 "Минусы": s["losses"],
                 "Винрейт": wr,
-                "Итог ($)": s["pl"],
+                f"Итог ({curr})": s["pl"],
             }
         )
 
@@ -167,7 +178,9 @@ def generate_excel_bytes(operations, user_id) -> bytes:
 
         ws_summary.append([])
         ws_summary.append(["СТАТИСТИКА ПО МЕСЯЦАМ"])
-        ws_summary.append(["Месяц", "Сделок", "Плюсы", "Минусы", "Винрейт", "Итог ($)"])
+        ws_summary.append(
+            ["Месяц", "Сделок", "Плюсы", "Минусы", "Винрейт", f"Итог ({curr})"]
+        )
         for item in monthly_rows:
             ws_summary.append(
                 [
@@ -176,13 +189,15 @@ def generate_excel_bytes(operations, user_id) -> bytes:
                     item["Плюсы"],
                     item["Минусы"],
                     item["Винрейт"],
-                    item["Итог ($)"],
+                    item[f"Итог ({curr})"],
                 ]
             )
 
         ws_summary.append([])
         ws_summary.append(["СТАТИСТИКА ПО ТОРГОВЫМ ПАРАМ"])
-        ws_summary.append(["Пара", "Сделок", "Плюсы", "Минусы", "Винрейт", "Итог ($)"])
+        ws_summary.append(
+            ["Пара", "Сделок", "Плюсы", "Минусы", "Винрейт", f"Итог ({curr})"]
+        )
         for item in pair_rows:
             ws_summary.append(
                 [
@@ -191,7 +206,7 @@ def generate_excel_bytes(operations, user_id) -> bytes:
                     item["Плюсы"],
                     item["Минусы"],
                     item["Винрейт"],
-                    item["Итог ($)"],
+                    item[f"Итог ({curr})"],
                 ]
             )
 
@@ -201,7 +216,7 @@ def generate_excel_bytes(operations, user_id) -> bytes:
             for cell in row:
                 if cell.value in [
                     "ОБЩИЕ ПОКАЗАТЕЛИ",
-                    "СТАТИСТИКА ПО МЕСЯЦАХ",
+                    "СТАТИСТИКА ПО МЕСЯЦАМ",
                     "СТАТИСТИКА ПО ТОРГОВЫМ ПАРАМ",
                 ]:
                     cell.font = Font(bold=True, size=11)
@@ -218,14 +233,12 @@ def generate_excel_bytes(operations, user_id) -> bytes:
         for r in range(3, len(summary_rows) + 3):
             val_name = ws_summary.cell(row=r, column=1).value
             val_cell = ws_summary.cell(row=r, column=2)
-            if "($)" in str(val_name) or val_name == "Текущий баланс":
-                val_cell.number_format = '"$"#,##0.00'
+            if f"({curr})" in str(val_name) or val_name == "Текущий баланс":
+                val_cell.number_format = money_fmt
             elif val_name == "Винрейт":
                 val_cell.number_format = '0.0%'
-            elif val_name in ["Профит-фактор", "Максимальная просадка ($)"]:
-                val_cell.number_format = (
-                    '0.00' if "Профит" in str(val_name) else '"$"#,##0.00'
-                )
+            elif val_name == "Профит-фактор":
+                val_cell.number_format = '0.00'
             else:
                 val_cell.number_format = '#,##0'
 
@@ -249,11 +262,11 @@ def generate_excel_bytes(operations, user_id) -> bytes:
 
             for col_idx in range(1, worksheet.max_column + 1):
                 col_name = worksheet.cell(row=1, column=col_idx).value
-                if col_name in ["Сумма операции ($)", "Конечный депозит ($)"]:
+                if col_name in [amount_col, balance_col, commission_col]:
                     for r_idx in range(2, worksheet.max_row + 1):
                         worksheet.cell(
                             row=r_idx, column=col_idx
-                        ).number_format = '"$"#,##0.00'
+                        ).number_format = money_fmt
                 elif col_name == "Риск (%)":
                     for r_idx in range(2, worksheet.max_row + 1):
                         if worksheet.cell(row=r_idx, column=col_idx).value:

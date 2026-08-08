@@ -190,6 +190,26 @@ def validate_note(value: str) -> Tuple[str, Optional[str]]:
 # ==================== Даты ====================
 
 
+def validate_single_date(value: str) -> Tuple[Optional[date], Optional[str]]:
+    """
+    Валидирует одиночную дату в формате ДД.ММ.ГГГГ (не в будущем).
+
+    Returns:
+        Кортеж (date, error_message)
+    """
+    try:
+        d = datetime.strptime(value.strip(), "%d.%m.%Y").date()
+    except ValueError:
+        return (
+            None,
+            "Неверный формат даты. Используйте ДД.ММ.ГГГГ (например, `01.01.2024`).",
+        )
+    today = datetime.now().date()
+    if d > today:
+        return None, "Дата не может быть в будущем."
+    return d, None
+
+
 def validate_date_range(
     start_str: str, end_str: str
 ) -> Tuple[Optional[Tuple[date, date]], Optional[str]]:
@@ -264,6 +284,67 @@ def validate_trade_confirmation(current_deposit: float, profit_loss: float) -> l
         warnings.append("⚠️ *Данная сделка полностью обнулит ваш депозит.*")
 
     return warnings
+
+
+def validate_commission(value: str) -> Tuple[Optional[float], Optional[str]]:
+    """
+    Валидирует комиссию по сделке (опционально, неотрицательная).
+
+    Пустое значение или "0" трактуется как отсутствие комиссии.
+
+    Returns:
+        Кортеж (commission, error_message)
+    """
+    text = value.strip().replace(",", ".")
+    if text in ("", "0", "-", "skip", "нет"):
+        return 0.0, None
+    try:
+        commission = float(text)
+    except ValueError:
+        return None, "Введите число (например, `1.5`) или нажмите «Пропустить»."
+
+    if commission < 0:
+        return None, "Комиссия не может быть отрицательной."
+    if commission > 1_000_000:
+        return None, "Комиссия кажется слишком большой (>1M). Проверьте значение."
+    if len(str(commission).split(".")[-1]) > 2 and commission != int(commission):
+        return None, "Используйте не более 2 десятичных знаков."
+    return commission, None
+
+
+def validate_tz_offset(value: str) -> Tuple[Optional[int], Optional[str]]:
+    """
+    Валидирует смещение часового пояса в часах (например, "+3", "-5", "5.5").
+
+    Returns:
+        Кортеж (minutes, error_message)
+    """
+    text = value.strip().lower().replace("utc", "").strip()
+    if not text:
+        return None, "Введите смещение, например `+3`, `-5` или `5.5`."
+    try:
+        hours = float(text.replace(",", "."))
+    except ValueError:
+        return None, "Введите смещение в часах, например `+3`, `-5` или `5.5`."
+    if not (-12 <= hours <= 14):
+        return None, "Смещение должно быть в диапазоне от -12 до +14 часов."
+    minutes = int(round(hours * 60))
+    return minutes, None
+
+
+def validate_account_name(value: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Валидирует название счёта.
+
+    Returns:
+        Кортеж (name, error_message)
+    """
+    name = value.strip()
+    if not name:
+        return None, "Название счёта не может быть пустым."
+    if len(name) > 30:
+        return None, "Название счёта слишком длинное (максимум 30 символов)."
+    return name, None
 
 
 def validate_withdrawal(amount: float, current_deposit: float) -> Optional[str]:

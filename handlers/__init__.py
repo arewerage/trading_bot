@@ -1,4 +1,16 @@
-from . import admin, deposit, excel, history, start, stats, trades
+from . import (
+    accounts,
+    admin,
+    chart,
+    deposit,
+    excel,
+    history,
+    imports,
+    settings,
+    start,
+    stats,
+    trades,
+)
 
 routers = [
     start.router,
@@ -6,6 +18,10 @@ routers = [
     trades.router,
     history.router,
     stats.router,
+    accounts.router,
+    settings.router,
+    chart.router,
+    imports.router,
     admin.router,
     excel.router,
 ]
