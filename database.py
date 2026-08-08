@@ -597,7 +597,7 @@ def log_balance_operation(
 
 
 def get_operations(account_id: int):
-    """Операции счёта (по возрастанию id). Порядок колонок совместим со старым кодом:
+    """Операции счёта (по возрастанию (date, id)). Порядок колонок совместим со старым кодом:
     (date, op_type, pair, lot, result, amount, balance_after, note, risk_pct, side, commission, id)."""
     conn = _connect()
     cur = conn.cursor()
@@ -606,7 +606,7 @@ def get_operations(account_id: int):
         SELECT date, op_type, pair, lot, result, amount, balance_after, note, risk_pct, side, commission, id
         FROM operations
         WHERE account_id = ?
-        ORDER BY id ASC
+        ORDER BY date ASC, id ASC
         """,
         (account_id,),
     )
@@ -634,7 +634,7 @@ def get_operations_total(account_id: int) -> int:
 
 
 def get_operations_page(account_id: int, page: int, per_page: int = 6):
-    """Страница операций (по убыванию id). Возвращает (rows, total).
+    """Страница операций (по убыванию (date, id)). Возвращает (rows, total).
     Строка: (id, date, op_type, pair, lot, result, amount, balance_after, note, risk_pct, side, commission)."""
     conn = _connect()
     cur = conn.cursor()
@@ -646,7 +646,7 @@ def get_operations_page(account_id: int, page: int, per_page: int = 6):
         SELECT id, date, op_type, pair, lot, result, amount, balance_after, note, risk_pct, side, commission
         FROM operations
         WHERE account_id = ?
-        ORDER BY id DESC
+        ORDER BY date DESC, id DESC
         LIMIT ? OFFSET ?
         """,
         (account_id, per_page, (page - 1) * per_page),
@@ -659,7 +659,7 @@ def get_operations_page(account_id: int, page: int, per_page: int = 6):
 def get_operations_page_filtered(
     account_id: int, page: int, per_page: int, op_types: list
 ):
-    """Страница операций, отфильтрованная по op_type. Возвращает (rows, total).
+    """Страница операций, отфильтрованная по op_type (по убыванию (date, id)). Возвращает (rows, total).
     Строка: (id, date, op_type, pair, lot, result, amount, balance_after, note, risk_pct, side, commission)."""
     ph = ",".join("?" for _ in op_types)
     conn = _connect()
@@ -673,7 +673,7 @@ def get_operations_page_filtered(
         SELECT id, date, op_type, pair, lot, result, amount, balance_after, note, risk_pct, side, commission
         FROM operations
         WHERE account_id = ? AND op_type IN ({ph})
-        ORDER BY id DESC
+        ORDER BY date DESC, id DESC
         LIMIT ? OFFSET ?
         """,
         (account_id, *op_types, per_page, (page - 1) * per_page),
@@ -684,7 +684,7 @@ def get_operations_page_filtered(
 
 
 def get_balance_operations(account_id: int):
-    """Пополнения/выводы счёта (по убыванию id). (id, date, op_type, amount, note)."""
+    """Пополнения/выводы счёта (по убыванию (date, id)). (id, date, op_type, amount, note)."""
     conn = _connect()
     cur = conn.cursor()
     cur.execute(
@@ -692,7 +692,7 @@ def get_balance_operations(account_id: int):
         SELECT id, date, op_type, amount, note
         FROM operations
         WHERE account_id = ? AND op_type IN ('Пополнение', 'Вывод')
-        ORDER BY id DESC
+        ORDER BY date DESC, id DESC
         """,
         (account_id,),
     )
@@ -736,7 +736,7 @@ def get_operation(account_id: int, op_id: int):
 
 
 def get_trades(account_id: int):
-    """Сделки счёта (по убыванию id). (id, date, pair, lot, side, result, amount, note, risk_pct, commission)."""
+    """Сделки счёта (по убыванию (date, id)). (id, date, pair, lot, side, result, amount, note, risk_pct, commission)."""
     conn = _connect()
     cur = conn.cursor()
     cur.execute(
@@ -744,7 +744,7 @@ def get_trades(account_id: int):
         SELECT id, date, pair, lot, side, result, amount, note, risk_pct, commission
         FROM operations
         WHERE account_id = ? AND op_type = 'Сделка'
-        ORDER BY id DESC
+        ORDER BY date DESC, id DESC
         """,
         (account_id,),
     )
@@ -814,6 +814,7 @@ def update_trade_date(account_id: int, trade_id: int, date_str: str):
     )
     conn.commit()
     conn.close()
+    recalc_account_balance(account_id)
 
 
 def update_trade_pair(account_id: int, trade_id: int, pair: str):
@@ -883,6 +884,7 @@ def update_operation_date(account_id: int, op_id: int, date_str: str):
     )
     conn.commit()
     conn.close()
+    recalc_account_balance(account_id)
 
 
 def update_operation_amount(account_id: int, op_id: int, amount: float):
@@ -936,7 +938,7 @@ def recalc_account_balance(account_id: int):
     conn = _connect()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, amount FROM operations WHERE account_id = ? ORDER BY id ASC",
+        "SELECT id, amount FROM operations WHERE account_id = ? ORDER BY date ASC, id ASC",
         (account_id,),
     )
     rows = cur.fetchall()
