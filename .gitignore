@@ -1,3 +1,4 @@
 .env
 __pycache__
 trading_bot.db
+.bob/format/

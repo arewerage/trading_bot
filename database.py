@@ -1,14 +1,16 @@
+import json
 import os
 import sqlite3
-import json
 from datetime import datetime
-from aiogram.fsm.storage.base import BaseStorage, StorageKey
+
 from aiogram.fsm.state import State
+from aiogram.fsm.storage.base import BaseStorage, StorageKey
 
 DB_DIR = "data"
 if not os.path.exists(DB_DIR):
     os.makedirs(DB_DIR, exist_ok=True)
 DB_NAME = os.path.join(DB_DIR, "trading_bot.db")
+
 
 class SQLiteFSMStorage(BaseStorage):
     def __init__(self, db_path=DB_NAME):
@@ -31,23 +33,39 @@ class SQLiteFSMStorage(BaseStorage):
         conn.commit()
         conn.close()
 
-    async def set_state(self, key: StorageKey, state: State | str | None = None) -> None:
+    async def set_state(
+        self, key: StorageKey, state: State | str | None = None
+    ) -> None:
         state_str = state.state if isinstance(state, State) else state
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO fsm_states (bot_id, chat_id, user_id, state, data)
             VALUES (?, ?, ?, ?, COALESCE((SELECT data FROM fsm_states WHERE bot_id=? AND chat_id=? AND user_id=?), '{}'))
             ON CONFLICT(bot_id, chat_id, user_id) DO UPDATE SET state = ?
-        """, (key.bot_id, key.chat_id, key.user_id, state_str, key.bot_id, key.chat_id, key.user_id, state_str))
+        """,
+            (
+                key.bot_id,
+                key.chat_id,
+                key.user_id,
+                state_str,
+                key.bot_id,
+                key.chat_id,
+                key.user_id,
+                state_str,
+            ),
+        )
         conn.commit()
         conn.close()
 
     async def get_state(self, key: StorageKey) -> str | None:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT state FROM fsm_states WHERE bot_id = ? AND chat_id = ? AND user_id = ?",
-                       (key.bot_id, key.chat_id, key.user_id))
+        cursor.execute(
+            "SELECT state FROM fsm_states WHERE bot_id = ? AND chat_id = ? AND user_id = ?",
+            (key.bot_id, key.chat_id, key.user_id),
+        )
         row = cursor.fetchone()
         conn.close()
         return row[0] if row and row[0] else None
@@ -56,19 +74,33 @@ class SQLiteFSMStorage(BaseStorage):
         data_str = json.dumps(data)
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO fsm_states (bot_id, chat_id, user_id, state, data)
             VALUES (?, ?, ?, (SELECT state FROM fsm_states WHERE bot_id=? AND chat_id=? AND user_id=?), ?)
             ON CONFLICT(bot_id, chat_id, user_id) DO UPDATE SET data = ?
-        """, (key.bot_id, key.chat_id, key.user_id, key.bot_id, key.chat_id, key.user_id, data_str, data_str))
+        """,
+            (
+                key.bot_id,
+                key.chat_id,
+                key.user_id,
+                key.bot_id,
+                key.chat_id,
+                key.user_id,
+                data_str,
+                data_str,
+            ),
+        )
         conn.commit()
         conn.close()
 
     async def get_data(self, key: StorageKey) -> dict:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT data FROM fsm_states WHERE bot_id = ? AND chat_id = ? AND user_id = ?",
-                       (key.bot_id, key.chat_id, key.user_id))
+        cursor.execute(
+            "SELECT data FROM fsm_states WHERE bot_id = ? AND chat_id = ? AND user_id = ?",
+            (key.bot_id, key.chat_id, key.user_id),
+        )
         row = cursor.fetchone()
         conn.close()
         if row and row[0]:
@@ -114,38 +146,56 @@ def init_db():
     conn.commit()
     conn.close()
 
-def set_user_deposit_and_currency(user_id: int, deposit: float, currency: str, op_type="Старт", amount=0.0):
+
+def set_user_deposit_and_currency(
+    user_id: int, deposit: float, currency: str, op_type="Старт", amount=0.0
+):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO users (user_id, deposit, currency) VALUES (?, ?, ?)
         ON CONFLICT(user_id) DO UPDATE SET deposit = ?, currency = ?
-    """, (user_id, deposit, currency, deposit, currency))
+    """,
+        (user_id, deposit, currency, deposit, currency),
+    )
 
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO operations (user_id, date, op_type, pair, lot, result, amount, balance_after, note, risk_pct)
         VALUES (?, ?, ?, '-', 0.0, '-', ?, ?, '', 0.0)
-    """, (user_id, date_str, op_type, amount, deposit))
+    """,
+        (user_id, date_str, op_type, amount, deposit),
+    )
 
     conn.commit()
     conn.close()
 
-def log_balance_operation(user_id: int, op_type: str, amount: int | float, new_deposit: float):
+
+def log_balance_operation(
+    user_id: int, op_type: str, amount: int | float, new_deposit: float
+):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    cursor.execute("UPDATE users SET deposit = ? WHERE user_id = ?", (new_deposit, user_id))
+    cursor.execute(
+        "UPDATE users SET deposit = ? WHERE user_id = ?", (new_deposit, user_id)
+    )
 
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO operations (user_id, date, op_type, pair, lot, result, amount, balance_after, note, risk_pct)
         VALUES (?, ?, ?, '-', 0.0, '-', ?, ?, '', 0.0)
-    """, (user_id, date_str, op_type, amount, new_deposit))
+    """,
+        (user_id, date_str, op_type, amount, new_deposit),
+    )
 
     conn.commit()
     conn.close()
+
 
 def get_user_deposit(user_id: int) -> float:
     conn = sqlite3.connect(DB_NAME)
@@ -155,6 +205,7 @@ def get_user_deposit(user_id: int) -> float:
     conn.close()
     return row[0] if row else 0.0
 
+
 def get_user_currency(user_id: int) -> str:
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -163,93 +214,143 @@ def get_user_currency(user_id: int) -> str:
     conn.close()
     return row[0] if row and row[0] else "USD"
 
-def add_trade_operation(user_id: int, pair: str, lot: float, result: str, profit_loss: float, new_deposit: float, note: str = "", risk_pct: float = 0.0):
+
+def add_trade_operation(
+    user_id: int,
+    pair: str,
+    lot: float,
+    result: str,
+    profit_loss: float,
+    new_deposit: float,
+    note: str = "",
+    risk_pct: float = 0.0,
+):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    cursor.execute("UPDATE users SET deposit = ? WHERE user_id = ?", (new_deposit, user_id))
+    cursor.execute(
+        "UPDATE users SET deposit = ? WHERE user_id = ?", (new_deposit, user_id)
+    )
 
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO operations (user_id, date, op_type, pair, lot, result, amount, balance_after, note, risk_pct)
         VALUES (?, ?, 'Сделка', ?, ?, ?, ?, ?, ?, ?)
-    """, (user_id, date_str, pair, lot, result, profit_loss, new_deposit, note, risk_pct))
+    """,
+        (
+            user_id,
+            date_str,
+            pair,
+            lot,
+            result,
+            profit_loss,
+            new_deposit,
+            note,
+            risk_pct,
+        ),
+    )
 
     conn.commit()
     conn.close()
 
+
 def get_user_operations(user_id: int):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT date, op_type, pair, lot, result, amount, balance_after, note, risk_pct
         FROM operations
         WHERE user_id = ?
         ORDER BY id ASC
-    """, (user_id,))
+    """,
+        (user_id,),
+    )
     rows = cursor.fetchall()
     conn.close()
     return rows
+
 
 def get_recent_operations(user_id: int, limit: int = 10):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT date, op_type, pair, lot, result, amount, balance_after, note, risk_pct
         FROM operations
         WHERE user_id = ?
         ORDER BY id DESC LIMIT ?
-    """, (user_id, limit))
+    """,
+        (user_id, limit),
+    )
     rows = cursor.fetchall()
     conn.close()
     return rows
 
+
 def get_last_trade(user_id: int):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT id, date, pair, lot, result, amount, balance_after, note, risk_pct
         FROM operations
         WHERE user_id = ? AND op_type = 'Сделка'
         ORDER BY id DESC LIMIT 1
-    """, (user_id,))
+    """,
+        (user_id,),
+    )
     row = cursor.fetchone()
     conn.close()
     return row
+
 
 def delete_trade_by_id(user_id: int, trade_id: int):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
-    cursor.execute("SELECT amount FROM operations WHERE id = ? AND user_id = ?", (trade_id, user_id))
+    cursor.execute(
+        "SELECT amount FROM operations WHERE id = ? AND user_id = ?",
+        (trade_id, user_id),
+    )
     row = cursor.fetchone()
     if not row:
         conn.close()
         return False
     amount = row[0]
 
-    cursor.execute("DELETE FROM operations WHERE id = ? AND user_id = ?", (trade_id, user_id))
+    cursor.execute(
+        "DELETE FROM operations WHERE id = ? AND user_id = ?", (trade_id, user_id)
+    )
 
     cursor.execute("SELECT deposit FROM users WHERE user_id = ?", (user_id,))
     dep_row = cursor.fetchone()
     if dep_row:
         new_deposit = max(0.0, dep_row[0] - amount)
-        cursor.execute("UPDATE users SET deposit = ? WHERE user_id = ?", (new_deposit, user_id))
+        cursor.execute(
+            "UPDATE users SET deposit = ? WHERE user_id = ?", (new_deposit, user_id)
+        )
 
     conn.commit()
     conn.close()
     return True
 
+
 def get_user_pairs(user_id: int):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT DISTINCT pair FROM operations
         WHERE user_id = ? AND op_type = 'Сделка' AND pair != '-'
-    """, (user_id,))
+    """,
+        (user_id,),
+    )
     rows = cursor.fetchall()
     conn.close()
     return [r[0] for r in rows]
+
 
 def reset_user_data(user_id: int):
     conn = sqlite3.connect(DB_NAME)
@@ -259,6 +360,7 @@ def reset_user_data(user_id: int):
     cursor.execute("DELETE FROM fsm_states WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
+
 
 def is_last_operation(user_id: int, trade_id: int) -> bool:
     conn = sqlite3.connect(DB_NAME)
