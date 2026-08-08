@@ -2,3 +2,4 @@
 __pycache__
 trading_bot.db
 .bob/format/
+.lcm

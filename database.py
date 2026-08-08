@@ -24,7 +24,9 @@ def _now_utc_str() -> str:
 
 def now_local(tz_offset: int) -> datetime:
     """Текущие дата/время в локальном поясе пользователя (naive, без tzinfo)."""
-    return datetime.now(timezone.utc) + timedelta(minutes=tz_offset)
+    return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(
+        minutes=tz_offset
+    )
 
 
 def now_local_str(tz_offset: int) -> str:

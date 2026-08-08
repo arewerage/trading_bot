@@ -69,7 +69,12 @@ async def callback_stats_period(callback: types.CallbackQuery, state: FSMContext
     elif callback.data == "stats_month":
         label = "месяц"
         f_func = lambda r, _now=now: _month_filter(_parse_dt(r[0]), _now)
-        date_str = now.strftime("%m.%Y")
+        first_day = now.replace(day=1)
+        last_day = first_day + timedelta(days=31)
+        last_day = last_day.replace(day=1) - timedelta(days=1)
+        date_str = (
+            f"{first_day.strftime('%d.%m.%Y')} — {last_day.strftime('%d.%m.%Y')}"
+        )
     else:
         label = "всю историю"
         f_func = None

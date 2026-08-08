@@ -10,8 +10,15 @@ from matplotlib.ticker import MaxNLocator
 
 def generate_balance_chart_bytes(operations, currency: str) -> bytes:
     """Строит график баланса по операциям счёта и возвращает PNG-байты."""
-    dates = [datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S") for r in operations]
-    balance = [r[6] for r in operations]
+    ordered = sorted(operations, key=lambda r: (r[0], r[11]))
+    dates = [
+        datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S") for r in ordered
+    ]
+    balance = []
+    acc = 0.0
+    for r in ordered:
+        acc = max(0.0, acc + (r[5] or 0.0))
+        balance.append(acc)
 
     fig, ax = plt.subplots(figsize=(8, 4.2), dpi=110)
     if len(dates) == 1:
