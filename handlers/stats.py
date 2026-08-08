@@ -81,7 +81,7 @@ async def callback_stats_period(callback: types.CallbackQuery, state: FSMContext
         date_str = ""
 
     stats = calculate_advanced_stats(get_operations(account_id), f_func)
-    title = f"за {label} ({date_str})" if date_str else "вся история"
+    title = f"За {label} ({date_str})" if date_str else "Вся история"
     text = format_stats_text(stats, curr, title)
     await update_interface(
         state,
