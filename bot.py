@@ -19,7 +19,7 @@ from database import (
     init_db, set_user_deposit_and_currency, get_user_deposit, get_user_currency,
     log_balance_operation, add_trade_operation,
     get_user_operations, get_recent_operations, get_last_trade, delete_trade_by_id,
-    get_user_pairs, reset_user_data, SQLiteFSMStorage
+    get_user_pairs, reset_user_data, is_last_operation, SQLiteFSMStorage
 )
 
 from keyboards.inline import (
@@ -351,6 +351,18 @@ async def callback_delete_last(callback: types.CallbackQuery, state: FSMContext)
         return
 
     trade_id, date, pair, lot, result, amount, balance_after, note, risk_pct = last_trade
+
+    if not is_last_operation(user_id, trade_id):
+        await callback.answer(
+            "❌ Нельзя удалить эту сделку!\n"
+            "После неё были выполнены пополнения или выводы. "
+            "Удаление нарушит историю баланса.",
+            show_alert=True
+        )
+
+        await callback_history(callback, state)
+        return
+
     await state.update_data(delete_trade_id=trade_id)
 
     note_str = f"🔹 Заметка: _{note}_\n" if note else ""

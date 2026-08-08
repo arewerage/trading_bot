@@ -259,3 +259,15 @@ def reset_user_data(user_id: int):
     cursor.execute("DELETE FROM fsm_states WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
+
+def is_last_operation(user_id: int, trade_id: int) -> bool:
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT MAX(id) FROM operations WHERE user_id = ?", (user_id,))
+    max_id_row = cursor.fetchone()
+    max_id = max_id_row[0] if max_id_row else None
+
+    conn.close()
+
+    return max_id == trade_id
