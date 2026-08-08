@@ -1,5 +1,7 @@
 from aiogram import types
+
 from database import get_user_pairs
+
 
 def get_main_keyboard():
     keyboard = [

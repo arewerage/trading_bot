@@ -32,6 +32,19 @@ from states.fsm import DepositState, TradeState, StatsState
 from utils.analytics import calculate_advanced_stats
 from utils.excel import generate_excel_bytes
 
+# Импорт функций валидации
+from utils.validators import (
+    validate_deposit,
+    validate_amount,
+    validate_lot,
+    validate_risk_percent,
+    validate_trading_pair,
+    validate_note,
+    validate_date_range,
+    validate_trade_confirmation,
+    validate_withdrawal
+)
+
 load_dotenv()
 
 API_TOKEN = os.getenv("API_TOKEN")
@@ -236,20 +249,17 @@ async def process_currency_choice(callback: types.CallbackQuery, state: FSMConte
 
 @dp.message(DepositState.waiting_for_deposit)
 async def process_deposit(message: types.Message, state: FSMContext):
-    try:
-        deposit = float(message.text.replace(",", "."))
-        if deposit <= 0:
-            await update_interface(state, message, "⚠️ Депозит должен быть больше нуля:", parse_mode="Markdown")
-            return
-        data = await state.get_data()
-        curr = data.get("currency", "USD")
-        user_id = message.from_user.id
+    amount, error = validate_deposit(message.text)
+    if error:
+        await update_interface(state, message, f"⚠️ {error}", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+        return
+    data = await state.get_data()
+    curr = data.get("currency", "USD")
+    user_id = message.from_user.id
 
-        set_user_deposit_and_currency(user_id, deposit, curr, op_type="Старт", amount=deposit)
-        await update_interface(state, message, f"✅ Стартовый депозит успешно установлен: **{deposit:.2f} {curr}**", reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
-        await state.clear()
-    except ValueError:
-        await update_interface(state, message, "⚠️ Пожалуйста, введите корректное число для депозита.", parse_mode="Markdown")
+    set_user_deposit_and_currency(user_id, amount, curr, op_type="Старт", amount=amount)
+    await update_interface(state, message, f"✅ Стартовый депозит успешно установлен: **{amount:.2f} {curr}**", reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
+    await state.clear()
 
 @dp.callback_query(F.data == "action_top_up")
 async def callback_top_up(callback: types.CallbackQuery, state: FSMContext):
@@ -259,19 +269,16 @@ async def callback_top_up(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(DepositState.waiting_for_top_up)
 async def process_top_up(message: types.Message, state: FSMContext):
-    try:
-        amount = float(message.text.replace(",", "."))
-        if amount <= 0:
-            await update_interface(state, message, "⚠️ Сумма должна быть больше нуля.", reply_markup=get_back_keyboard(), parse_mode="Markdown")
-            return
-        user_id = message.from_user.id
-        curr = get_user_currency(user_id)
-        new_deposit = get_user_deposit(user_id) + amount
-        log_balance_operation(user_id, "Пополнение", amount, new_deposit)
-        await update_interface(state, message, f"✅ Баланс успешно пополнен на **+{amount:.2f} {curr}**\n💰 Новый депозит: **{new_deposit:.2f} {curr}**", reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
-        await state.clear()
-    except ValueError:
-        await update_interface(state, message, "⚠️ Введите числовое значение.", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+    amount, error = validate_deposit(message.text)
+    if error:
+        await update_interface(state, message, f"⚠️ {error}", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+        return
+    user_id = message.from_user.id
+    curr = get_user_currency(user_id)
+    new_deposit = get_user_deposit(user_id) + amount
+    log_balance_operation(user_id, "Пополнение", amount, new_deposit)
+    await update_interface(state, message, f"✅ Баланс успешно пополнен на **+{amount:.2f} {curr}**\n💰 Новый депозит: **{new_deposit:.2f} {curr}**", reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
+    await state.clear()
 
 @dp.callback_query(F.data == "action_withdraw")
 async def callback_withdraw(callback: types.CallbackQuery, state: FSMContext):
@@ -285,15 +292,13 @@ async def callback_withdraw(callback: types.CallbackQuery, state: FSMContext):
 async def process_withdraw(message: types.Message, state: FSMContext):
     try:
         amount = float(message.text.replace(",", "."))
-        if amount <= 0:
-            await update_interface(state, message, "⚠️ Сумма должна быть больше нуля.", reply_markup=get_back_keyboard(), parse_mode="Markdown")
-            return
         user_id = message.from_user.id
         current_deposit = get_user_deposit(user_id)
-        curr = get_user_currency(user_id)
-        if amount > current_deposit:
-            await update_interface(state, message, f"⚠️ Нельзя вывести больше, чем есть на балансе! Доступно: **{current_deposit:.2f} {curr}**", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+        error = validate_withdrawal(amount, current_deposit)
+        if error:
+            await update_interface(state, message, f"⚠️ {error}", reply_markup=get_back_keyboard(), parse_mode="Markdown")
             return
+        curr = get_user_currency(user_id)
         new_deposit = current_deposit - amount
         log_balance_operation(user_id, "Вывод", -amount, new_deposit)
         await update_interface(state, message, f"✅ Успешно выведено: **-{amount:.2f} {curr}**\n💰 Новый депозит: **{new_deposit:.2f} {curr}**", reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
@@ -431,10 +436,9 @@ async def process_pair_callback(callback: types.CallbackQuery, state: FSMContext
 
 @dp.message(TradeState.waiting_for_pair)
 async def process_pair_text(message: types.Message, state: FSMContext):
-    pair = message.text.strip().upper().replace("/", "").replace("-", "").replace(" ", "")
-    if not pair:
-        text = "⚠️ Пара не может быть пустой. Введите название пары (например, `XAUUSD`):"
-        await update_interface(state, message, text, reply_markup=get_back_keyboard(), parse_mode="Markdown")
+    pair, error = validate_trading_pair(message.text)
+    if error:
+        await update_interface(state, message, f"⚠️ {error}", reply_markup=get_back_keyboard(), parse_mode="Markdown")
         return
     await state.update_data(pair=pair)
     text = f"Выбрана пара: `{pair}`\n\nВведите объем лота (например, `0.1`):"
@@ -443,43 +447,43 @@ async def process_pair_text(message: types.Message, state: FSMContext):
 
 @dp.message(TradeState.waiting_for_lot)
 async def process_lot(message: types.Message, state: FSMContext):
-    try:
-        lot = float(message.text.replace(",", "."))
-        if lot <= 0:
-            raise ValueError()
-        await state.update_data(lot=lot)
-        curr = get_user_currency(message.from_user.id)
-        text = f"Введите сумму профита или убытка в {curr}\n*(для прибыли укажите число без знака или с плюсом, для убытка — со знаком минус, например: `50` или `-20`)*:"
-        await update_interface(state, message, text, reply_markup=get_back_keyboard(), parse_mode="Markdown")
-        await state.set_state(TradeState.waiting_for_profit)
-    except ValueError:
-        await update_interface(state, message, "⚠️ Введите корректный объем лота (> 0):", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+    lot, warning_or_error = validate_lot(message.text)
+    if warning_or_error and not warning_or_error.startswith("⚠️ Предупреждение"):
+        # Это ошибка
+        await update_interface(state, message, f"⚠️ {warning_or_error}", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+        return
+    # Если ошибок нет (или есть предупреждение)
+    await state.update_data(lot=lot)
+    curr = get_user_currency(message.from_user.id)
+    text = f"Введите сумму профита или убытка в {curr}\n*(для прибыли укажите число без знака или с плюсом, для убытка — со знаком минус, например: `50` или `-20`)*:"
+    if warning_or_error and warning_or_error.startswith("⚠️ Предупреждение"):
+        text = f"{warning_or_error}\n\n" + text
+    await update_interface(state, message, text, reply_markup=get_back_keyboard(), parse_mode="Markdown")
+    await state.set_state(TradeState.waiting_for_profit)
 
 @dp.message(TradeState.waiting_for_profit)
 async def process_profit(message: types.Message, state: FSMContext):
-    try:
-        profit_loss = float(message.text.replace(",", "."))
-        await state.update_data(profit_loss=profit_loss)
-        keyboard = [
-            [types.InlineKeyboardButton(text="⏩ Пропустить риск", callback_data="skip_risk")],
-            [types.InlineKeyboardButton(text="◀️ Отмена", callback_data="main_menu")]
-        ]
-        text = "🛡️ Введите **планируемый риск на сделку в % от депозита** (опционально, например `1` или `1.5`):"
-        await update_interface(state, message, text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="Markdown")
-        await state.set_state(TradeState.waiting_for_risk)
-    except ValueError:
-        curr = get_user_currency(message.from_user.id)
-        await update_interface(state, message, f"⚠️ Введите числовое значение суммы в {curr}:", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+    amount, error = validate_amount(message.text)
+    if error:
+        await update_interface(state, message, f"⚠️ {error}", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+        return
+    await state.update_data(profit_loss=amount)
+    keyboard = [
+        [types.InlineKeyboardButton(text="⏩ Пропустить риск", callback_data="skip_risk")],
+        [types.InlineKeyboardButton(text="◀️ Отмена", callback_data="main_menu")]
+    ]
+    text = "🛡️ Введите **планируемый риск на сделку в % от депозита** (опционально, например `1` или `1.5`):"
+    await update_interface(state, message, text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="Markdown")
+    await state.set_state(TradeState.waiting_for_risk)
 
 @dp.message(TradeState.waiting_for_risk)
 async def process_risk_text(message: types.Message, state: FSMContext):
-    try:
-        risk_pct = float(message.text.replace(",", "."))
-        if risk_pct < 0 or risk_pct > 100: raise ValueError()
-        await state.update_data(risk_pct=risk_pct)
-        await prompt_for_note(message, state)
-    except ValueError:
-        await update_interface(state, message, "⚠️ Введите корректный процент риска (от 0 до 100):", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+    risk, error = validate_risk_percent(message.text)
+    if error:
+        await update_interface(state, message, f"⚠️ {error}", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+        return
+    await state.update_data(risk_pct=risk)
+    await prompt_for_note(message, state)
 
 @dp.callback_query(F.data == "skip_risk", TradeState.waiting_for_risk)
 async def process_risk_skip(callback: types.CallbackQuery, state: FSMContext):
@@ -497,7 +501,11 @@ async def prompt_for_note(event, state: FSMContext):
 
 @dp.message(TradeState.waiting_for_note)
 async def process_note_text(message: types.Message, state: FSMContext):
-    await state.update_data(note=message.text.strip())
+    note, error = validate_note(message.text)
+    if error:
+        await update_interface(state, message, f"⚠️ {error}", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+        return
+    await state.update_data(note=note)
     await show_trade_confirmation(message, state)
 
 @dp.callback_query(F.data == "skip_note", TradeState.waiting_for_note)
@@ -511,7 +519,11 @@ async def show_trade_confirmation(event, state: FSMContext):
     risk_pct, note = data.get("risk_pct", 0.0), data.get("note", "")
     result = "Win" if profit_loss >= 0 else "Loss"
 
-    curr = get_user_currency(event.from_user.id)
+    user_id = event.from_user.id
+    curr = get_user_currency(user_id)
+    current_deposit = get_user_deposit(user_id)
+    warnings = validate_trade_confirmation(current_deposit, profit_loss)
+
     await state.update_data(result=result)
 
     keyboard = [
@@ -527,6 +539,9 @@ async def show_trade_confirmation(event, state: FSMContext):
         f"🔹 Профит / Убыток: `{profit_loss:+.2f} {curr}`\n"
         f"{risk_str}{note_str}"
     )
+    if warnings:
+        text += "\n\n⚠️ **Предупреждения:**\n" + "\n".join(warnings)
+
     await update_interface(state, event, text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="Markdown")
     await state.set_state(TradeState.waiting_for_confirmation)
 
@@ -597,18 +612,22 @@ async def callback_stats_custom(callback: types.CallbackQuery, state: FSMContext
 
 @dp.message(StatsState.waiting_for_custom_period)
 async def process_custom_period(message: types.Message, state: FSMContext):
-    try:
-        parts = message.text.strip().split("-")
-        start_date = datetime.strptime(parts[0].strip(), "%d.%m.%Y").date()
-        end_date = datetime.strptime(parts[1].strip(), "%d.%m.%Y").date()
-        user_id = message.from_user.id
-        curr = get_user_currency(user_id)
-        stats = calculate_advanced_stats(get_user_operations(user_id), lambda r: start_date <= datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S").date() <= end_date)
-        text = f"📊 **Период:**\n\n📁 Сделок: `{stats['total']}`\n💰 Итог: `{stats['total_pl']:+.2f} {curr}`" if stats else "📊 Сделок не найдено."
-        await update_interface(state, message, text, reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
-        await state.clear()
-    except Exception:
+    parts = message.text.strip().split("-")
+    if len(parts) != 2:
         await update_interface(state, message, "⚠️ Ошибка формата. Введите в формате `ДД.ММ.ГГГГ - ДД.ММ.ГГГГ`", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+        return
+    start_str, end_str = parts[0].strip(), parts[1].strip()
+    result, error = validate_date_range(start_str, end_str)
+    if error:
+        await update_interface(state, message, f"⚠️ {error}", reply_markup=get_back_keyboard(), parse_mode="Markdown")
+        return
+    start_date, end_date = result
+    user_id = message.from_user.id
+    curr = get_user_currency(user_id)
+    stats = calculate_advanced_stats(get_user_operations(user_id), lambda r: start_date <= datetime.strptime(r[0], "%Y-%m-%d %H:%M:%S").date() <= end_date)
+    text = f"📊 **Период:**\n\n📁 Сделок: `{stats['total']}`\n💰 Итог: `{stats['total_pl']:+.2f} {curr}`" if stats else "📊 Сделок не найдено."
+    await update_interface(state, message, text, reply_markup=get_main_keyboard(user_id), parse_mode="Markdown")
+    await state.clear()
 
 # --- Генерация Excel ---
 @dp.callback_query(F.data == "action_excel")
