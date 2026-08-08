@@ -6,6 +6,7 @@ from . import (
     excel,
     history,
     imports,
+    reports,
     settings,
     start,
     stats,
@@ -24,4 +25,5 @@ routers = [
     imports.router,
     admin.router,
     excel.router,
+    reports.router,
 ]

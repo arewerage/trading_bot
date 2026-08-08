@@ -38,6 +38,22 @@ class StatsState(StatesGroup):
     waiting_for_custom_period = State()
 
 
+class ExcelState(StatesGroup):
+    waiting_for_custom_period = State()
+
+
+class EditOpState(StatesGroup):
+    edit_date = State()
+    edit_date_custom = State()
+    edit_amount = State()
+    edit_note = State()
+
+
+class AdminState(StatesGroup):
+    waiting_for_broadcast = State()
+    waiting_for_broadcast_confirm = State()
+
+
 class AccountState(StatesGroup):
     waiting_for_new_name = State()
     waiting_for_currency = State()

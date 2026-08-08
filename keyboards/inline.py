@@ -112,6 +112,20 @@ def get_data_keyboard(user_id: int):
                 )
             ]
         )
+        keyboard.append(
+            [
+                types.InlineKeyboardButton(
+                    text="📊 Отчёт сейчас", callback_data="action_report_now"
+                )
+            ]
+        )
+        keyboard.append(
+            [
+                types.InlineKeyboardButton(
+                    text="📢 Сообщение всем", callback_data="action_broadcast"
+                )
+            ]
+        )
     keyboard.append(
         [
             types.InlineKeyboardButton(text="🔄 Сброс данных", callback_data="action_reset"),
@@ -127,12 +141,40 @@ def get_data_keyboard(user_id: int):
 
 # --- История ---
 def get_history_keyboard(
-    page: int, total: int, per_page: int = 6, has_trades: bool = False
+    page: int,
+    total: int,
+    per_page: int = 6,
+    has_trades: bool = False,
+    op_filter: str = "all",
 ):
     keyboard = []
     nav = _nav_row(page, total, per_page, "hist")
     if nav:
         keyboard.append(nav)
+    keyboard.append(
+        [
+            types.InlineKeyboardButton(
+                text="✅ 📜 Все" if op_filter == "all" else "📜 Все",
+                callback_data="hist_filter_all",
+            ),
+            types.InlineKeyboardButton(
+                text="✅ 🔹 Сделки" if op_filter == "trades" else "🔹 Сделки",
+                callback_data="hist_filter_trades",
+            ),
+        ]
+    )
+    keyboard.append(
+        [
+            types.InlineKeyboardButton(
+                text="✅ 🟢 Пополнения" if op_filter == "deposits" else "🟢 Пополнения",
+                callback_data="hist_filter_deposits",
+            ),
+            types.InlineKeyboardButton(
+                text="✅ 🔴 Выводы" if op_filter == "withdrawals" else "🔴 Выводы",
+                callback_data="hist_filter_withdrawals",
+            ),
+        ]
+    )
     actions = []
     if has_trades:
         actions.append(
@@ -140,6 +182,11 @@ def get_history_keyboard(
                 text="✏️ Изменить сделку", callback_data="edit_trade_menu"
             )
         )
+    actions.append(
+        types.InlineKeyboardButton(
+            text="✏️ Пополнение/вывод", callback_data="edit_op_menu"
+        )
+    )
     if total:
         actions.append(
             types.InlineKeyboardButton(
@@ -205,6 +252,57 @@ def get_edit_trades_keyboard(rows, page: int, total: int, per_page: int = 8):
     keyboard.append(
         [types.InlineKeyboardButton(text="◀️ В главное меню", callback_data="main_menu")]
     )
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_edit_ops_keyboard(rows, page: int, total: int, per_page: int = 8):
+    keyboard = []
+    for op_id, date, op_type, amount, _ in rows:
+        label = f"✏️ {date[8:10]}.{date[5:7]} {op_type} ({amount:+.2f})"
+        keyboard.append(
+            [
+                types.InlineKeyboardButton(
+                    text=label, callback_data=f"edit_op_{op_id}"
+                )
+            ]
+        )
+    nav = _nav_row(page, total, per_page, "editop")
+    if nav:
+        keyboard.append(nav)
+    keyboard.append(
+        [
+            types.InlineKeyboardButton(
+                text="◀️ Назад к истории", callback_data="action_history"
+            )
+        ]
+    )
+    keyboard.append(
+        [types.InlineKeyboardButton(text="◀️ В главное меню", callback_data="main_menu")]
+    )
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_edit_op_keyboard(op_id: int):
+    keyboard = [
+        [
+            types.InlineKeyboardButton(
+                text="📅 Дата", callback_data="edit_op_field_date"
+            ),
+            types.InlineKeyboardButton(
+                text="💰 Сумма", callback_data="edit_op_field_amount"
+            ),
+        ],
+        [
+            types.InlineKeyboardButton(
+                text="✍️ Заметка", callback_data="edit_op_field_note"
+            ),
+        ],
+        [
+            types.InlineKeyboardButton(
+                text="◀️ К списку операций", callback_data="edit_op_menu"
+            ),
+        ],
+    ]
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
@@ -443,6 +541,40 @@ def get_chart_keyboard():
         [
             types.InlineKeyboardButton(text="◀️ В аналитику", callback_data="action_analytics"),
         ],
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_excel_keyboard():
+    keyboard = [
+        [
+            types.InlineKeyboardButton(text="🌐 Всё", callback_data="excel_all"),
+            types.InlineKeyboardButton(text="📅 Сегодня", callback_data="excel_today"),
+        ],
+        [
+            types.InlineKeyboardButton(text="📆 Неделя", callback_data="excel_week"),
+            types.InlineKeyboardButton(text="🗓 Месяц", callback_data="excel_month"),
+        ],
+        [
+            types.InlineKeyboardButton(
+                text="⏱ Свой период", callback_data="excel_custom"
+            ),
+        ],
+        [
+            types.InlineKeyboardButton(
+                text="◀️ В аналитику", callback_data="action_analytics"
+            ),
+        ],
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_report_keyboard():
+    keyboard = [
+        [
+            types.InlineKeyboardButton(text="🔄 Ещё раз", callback_data="report_again"),
+            types.InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu"),
+        ]
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 

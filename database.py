@@ -656,6 +656,68 @@ def get_operations_page(account_id: int, page: int, per_page: int = 6):
     return rows, total
 
 
+def get_operations_page_filtered(
+    account_id: int, page: int, per_page: int, op_types: list
+):
+    """Страница операций, отфильтрованная по op_type. Возвращает (rows, total).
+    Строка: (id, date, op_type, pair, lot, result, amount, balance_after, note, risk_pct, side, commission)."""
+    ph = ",".join("?" for _ in op_types)
+    conn = _connect()
+    cur = conn.cursor()
+    total = cur.execute(
+        f"SELECT COUNT(*) FROM operations WHERE account_id = ? AND op_type IN ({ph})",
+        (account_id, *op_types),
+    ).fetchone()[0]
+    cur.execute(
+        f"""
+        SELECT id, date, op_type, pair, lot, result, amount, balance_after, note, risk_pct, side, commission
+        FROM operations
+        WHERE account_id = ? AND op_type IN ({ph})
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?
+        """,
+        (account_id, *op_types, per_page, (page - 1) * per_page),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows, total
+
+
+def get_balance_operations(account_id: int):
+    """Пополнения/выводы счёта (по убыванию id). (id, date, op_type, amount, note)."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, date, op_type, amount, note
+        FROM operations
+        WHERE account_id = ? AND op_type IN ('Пополнение', 'Вывод')
+        ORDER BY id DESC
+        """,
+        (account_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_balance_operation(account_id: int, op_id: int):
+    """Пополнение/вывод. (id, date, op_type, amount, note)."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, date, op_type, amount, note
+        FROM operations
+        WHERE id = ? AND account_id = ? AND op_type IN ('Пополнение', 'Вывод')
+        """,
+        (op_id, account_id),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return tuple(row) if row else None
+
+
 def get_operation(account_id: int, op_id: int):
     """Операция с id. (id, date, op_type, pair, lot, result, amount, balance_after, note, risk_pct, side, commission)."""
     conn = _connect()
@@ -809,6 +871,43 @@ def update_trade_commission(account_id: int, trade_id: int, commission: float):
     conn.commit()
     conn.close()
     recalc_account_balance(account_id)
+
+
+def update_operation_date(account_id: int, op_id: int, date_str: str):
+    """Меняет дату пополнения/вывода."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE operations SET date = ? WHERE id = ? AND account_id = ? AND op_type IN ('Пополнение', 'Вывод')",
+        (date_str, op_id, account_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_operation_amount(account_id: int, op_id: int, amount: float):
+    """Меняет сумму пополнения/вывода и пересчитывает баланс."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE operations SET amount = ? WHERE id = ? AND account_id = ? AND op_type IN ('Пополнение', 'Вывод')",
+        (amount, op_id, account_id),
+    )
+    conn.commit()
+    conn.close()
+    recalc_account_balance(account_id)
+
+
+def update_operation_note(account_id: int, op_id: int, note: str):
+    """Меняет заметку пополнения/вывода."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE operations SET note = ? WHERE id = ? AND account_id = ? AND op_type IN ('Пополнение', 'Вывод')",
+        (note, op_id, account_id),
+    )
+    conn.commit()
+    conn.close()
 
 
 def delete_operation(account_id: int, op_id: int) -> bool:
@@ -973,3 +1072,12 @@ def get_report_users():
     rows = cur.fetchall()
     conn.close()
     return [tuple(r) for r in rows]
+
+
+def get_all_user_ids():
+    """Все известные пользователи (для рассылки админом)."""
+    conn = _connect()
+    cur = conn.cursor()
+    rows = cur.execute("SELECT user_id FROM users").fetchall()
+    conn.close()
+    return [r[0] for r in rows]

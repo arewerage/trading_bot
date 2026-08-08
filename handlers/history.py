@@ -8,14 +8,20 @@ from database import (
     delete_operation,
     fmt_dt,
     get_active_account_id,
+    get_balance_operation,
+    get_balance_operations,
     get_operation,
     get_operations_page,
+    get_operations_page_filtered,
     get_trade,
     get_trades,
     get_user_currency,
     get_user_deposit,
     get_user_tz_offset,
     now_local,
+    update_operation_amount,
+    update_operation_date,
+    update_operation_note,
     update_trade_amount,
     update_trade_commission,
     update_trade_date,
@@ -30,6 +36,8 @@ from keyboards.inline import (
     get_back_keyboard,
     get_date_keyboard,
     get_del_ops_keyboard,
+    get_edit_op_keyboard,
+    get_edit_ops_keyboard,
     get_edit_trade_keyboard,
     get_edit_trades_keyboard,
     get_history_keyboard,
@@ -37,7 +45,7 @@ from keyboards.inline import (
     get_pairs_keyboard,
     get_side_keyboard,
 )
-from states.fsm import TradeState
+from states.fsm import EditOpState, TradeState
 from utils.validators import (
     validate_amount,
     validate_commission,
@@ -52,6 +60,12 @@ router = Router()
 
 HIST_PER_PAGE = 6
 LIST_PER_PAGE = 8
+
+_OP_TYPE_MAP = {
+    "trades": ["Сделка"],
+    "deposits": ["Пополнение"],
+    "withdrawals": ["Вывод"],
+}
 
 
 def _op_line(row, curr: str) -> str:
@@ -70,22 +84,34 @@ async def callback_noop(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# --- История (с пагинацией) ---
+# --- История (с пагинацией и фильтром) ---
 async def render_history(callback: types.CallbackQuery, state: FSMContext, page: int):
     user_id = callback.from_user.id
     account_id = get_active_account_id(user_id)
     curr = get_user_currency(user_id)
-    rows, total = get_operations_page(account_id, page, HIST_PER_PAGE)
+    data = await state.get_data()
+    op_filter = data.get("history_filter", "all")
+
+    if op_filter in _OP_TYPE_MAP:
+        rows, total = get_operations_page_filtered(
+            account_id, page, HIST_PER_PAGE, _OP_TYPE_MAP[op_filter]
+        )
+    else:
+        op_filter = "all"
+        await state.update_data(history_filter="all")
+        rows, total = get_operations_page(account_id, page, HIST_PER_PAGE)
     pages = max(1, math.ceil(total / HIST_PER_PAGE))
     page = min(page, pages)
 
     if not rows:
-        text = "📜 **История сделок**\n\nУ вас пока нет сохраненных операций."
+        text = "📜 **История операций**\n\nВ выбранной категории операций нет."
         await update_interface(
             state,
             callback,
             text,
-            reply_markup=get_back_keyboard(),
+            reply_markup=get_history_keyboard(
+                page, total, HIST_PER_PAGE, bool(get_trades(account_id)), op_filter
+            ),
             parse_mode="Markdown",
         )
         return
@@ -99,13 +125,16 @@ async def render_history(callback: types.CallbackQuery, state: FSMContext, page:
         state,
         callback,
         text,
-        reply_markup=get_history_keyboard(page, total, HIST_PER_PAGE, has_trades),
+        reply_markup=get_history_keyboard(
+            page, total, HIST_PER_PAGE, has_trades, op_filter
+        ),
         parse_mode="Markdown",
     )
 
 
 @router.callback_query(F.data == "action_history")
 async def callback_history(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(history_filter="all")
     await render_history(callback, state, 1)
 
 
@@ -113,6 +142,15 @@ async def callback_history(callback: types.CallbackQuery, state: FSMContext):
 async def callback_history_page(callback: types.CallbackQuery, state: FSMContext):
     page = int(callback.data.replace("hist_page_", ""))
     await render_history(callback, state, page)
+
+
+@router.callback_query(F.data.startswith("hist_filter_"))
+async def callback_history_filter(callback: types.CallbackQuery, state: FSMContext):
+    op_filter = callback.data.replace("hist_filter_", "")
+    if op_filter not in _OP_TYPE_MAP:
+        op_filter = "all"
+    await state.update_data(history_filter=op_filter)
+    await render_history(callback, state, 1)
 
 
 # --- Удаление любой операции ---
@@ -603,3 +641,240 @@ async def process_edit_commission(message: types.Message, state: FSMContext):
     account_id = get_active_account_id(message.from_user.id)
     update_trade_commission(account_id, trade_id, commission)
     await _refresh_edit_detail(message, state, "✅ Комиссия обновлена")
+
+
+# ==================== Редактирование пополнений/выводов ====================
+
+
+async def render_edit_op_list(event, state: FSMContext, page: int):
+    user_id = event.from_user.id
+    account_id = get_active_account_id(user_id)
+    ops = get_balance_operations(account_id)
+    total = len(ops)
+    if total == 0:
+        await event.answer("Пополнений/выводов для редактирования нет.", show_alert=True)
+        await render_history(event, state, 1)
+        return
+    pages = max(1, math.ceil(total / LIST_PER_PAGE))
+    page = min(page, pages)
+    start = (page - 1) * LIST_PER_PAGE
+    page_rows = ops[start : start + LIST_PER_PAGE]
+    text = f"✏️ **Выберите операцию для редактирования** (стр. {page}/{pages}):"
+    await update_interface(
+        state,
+        event,
+        text,
+        reply_markup=get_edit_ops_keyboard(page_rows, page, total, LIST_PER_PAGE),
+        parse_mode="Markdown",
+    )
+
+
+@router.callback_query(F.data == "edit_op_menu")
+async def callback_edit_op_menu(callback: types.CallbackQuery, state: FSMContext):
+    await render_edit_op_list(callback, state, 1)
+
+
+@router.callback_query(F.data.startswith("editop_page_"))
+async def callback_edit_op_page(callback: types.CallbackQuery, state: FSMContext):
+    page = int(callback.data.replace("editop_page_", ""))
+    await render_edit_op_list(callback, state, page)
+
+
+@router.callback_query(F.data.startswith("edit_op_"))
+async def callback_edit_op(callback: types.CallbackQuery, state: FSMContext):
+    op_id = int(callback.data.replace("edit_op_", ""))
+    user_id = callback.from_user.id
+    account_id = get_active_account_id(user_id)
+    op = get_balance_operation(account_id, op_id)
+    if not op:
+        await callback.answer("Операция не найдена.", show_alert=True)
+        return
+    await state.update_data(edit_op_id=op_id)
+    await render_edit_op_detail(callback, state, op)
+
+
+async def render_edit_op_detail(event, state: FSMContext, op, status: str = ""):
+    op_id, date, op_type, amount, note = op
+    curr = get_user_currency(event.from_user.id)
+    note_str = f"📝 Заметка: _{note}_\n" if note else ""
+    status_str = f"{status}\n\n" if status else ""
+    text = (
+        f"{status_str}✏️ **Редактирование операции**\n\n"
+        f"📅 Дата: `{date}`\n"
+        f"🔹 Тип: *{op_type}*\n"
+        f"💰 Сумма: `{amount:+.2f} {curr}`\n"
+        f"{note_str}"
+    )
+    await update_interface(
+        state,
+        event,
+        text,
+        reply_markup=get_edit_op_keyboard(op_id),
+        parse_mode="Markdown",
+    )
+
+
+async def _refresh_edit_op_detail(event, state: FSMContext, status: str):
+    data = await state.get_data()
+    op_id = data.get("edit_op_id")
+    account_id = get_active_account_id(event.from_user.id)
+    op = get_balance_operation(account_id, op_id)
+    if op:
+        await render_edit_op_detail(event, state, op, status)
+    else:
+        await update_interface(
+            state,
+            event,
+            "⚠️ Операция не найдена.",
+            reply_markup=get_main_keyboard(event.from_user.id),
+            parse_mode="Markdown",
+        )
+
+
+# --- Дата ---
+@router.callback_query(F.data == "edit_op_field_date")
+async def callback_edit_op_date(callback: types.CallbackQuery, state: FSMContext):
+    await update_interface(
+        state,
+        callback,
+        "📅 Выберите новую дату операции:",
+        reply_markup=get_date_keyboard(prefix="editopdate"),
+        parse_mode="Markdown",
+    )
+    await state.set_state(EditOpState.edit_date)
+
+
+async def _apply_edit_op_date(event, state: FSMContext, date_str: str):
+    data = await state.get_data()
+    op_id = data.get("edit_op_id")
+    account_id = get_active_account_id(event.from_user.id)
+    update_operation_date(account_id, op_id, date_str)
+    await _refresh_edit_op_detail(event, state, "✅ Дата обновлена")
+
+
+@router.callback_query(F.data.startswith("editopdate_"), EditOpState.edit_date)
+async def process_edit_op_date(callback: types.CallbackQuery, state: FSMContext):
+    if callback.data == "editopdate_custom":
+        await update_interface(
+            state,
+            callback,
+            "✍️ Введите дату в формате `ДД.ММ.ГГГГ` (например, `05.01.2026`):",
+            reply_markup=get_back_keyboard(),
+            parse_mode="Markdown",
+        )
+        await state.set_state(EditOpState.edit_date_custom)
+        return
+    tz = get_user_tz_offset(callback.from_user.id)
+    now = now_local(tz)
+    if callback.data == "editopdate_today":
+        date_str = fmt_dt(now)
+    else:
+        date_str = fmt_dt(now - timedelta(days=1))
+    await _apply_edit_op_date(callback, state, date_str)
+
+
+@router.message(EditOpState.edit_date_custom)
+async def process_edit_op_date_custom(message: types.Message, state: FSMContext):
+    d, error = validate_single_date(message.text)
+    if error:
+        await update_interface(
+            state,
+            message,
+            f"⚠️ {error}",
+            reply_markup=get_back_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+    date_str = f"{d.strftime('%Y-%m-%d')} 12:00:00"
+    await _apply_edit_op_date(message, state, date_str)
+
+
+# --- Сумма ---
+@router.callback_query(F.data == "edit_op_field_amount")
+async def callback_edit_op_amount(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    op_id = data.get("edit_op_id")
+    account_id = get_active_account_id(callback.from_user.id)
+    op = get_balance_operation(account_id, op_id)
+    is_withdraw = bool(op) and op[2] == "Вывод"
+    sign_hint = (
+        "число со знаком, например `-50`"
+        if is_withdraw
+        else "положительное число, например `500`"
+    )
+    await update_interface(
+        state,
+        callback,
+        f"💰 Введите новую сумму ({sign_hint}):",
+        reply_markup=get_back_keyboard(),
+        parse_mode="Markdown",
+    )
+    await state.set_state(EditOpState.edit_amount)
+
+
+@router.message(EditOpState.edit_amount)
+async def process_edit_op_amount(message: types.Message, state: FSMContext):
+    amount, error = validate_amount(message.text)
+    if error:
+        await update_interface(
+            state,
+            message,
+            f"⚠️ {error}",
+            reply_markup=get_back_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+    data = await state.get_data()
+    op_id = data.get("edit_op_id")
+    user_id = message.from_user.id
+    account_id = get_active_account_id(user_id)
+    op = get_balance_operation(account_id, op_id)
+    if not op:
+        await update_interface(
+            state,
+            message,
+            "⚠️ Операция не найдена.",
+            reply_markup=get_main_keyboard(user_id),
+            parse_mode="Markdown",
+        )
+        return
+    if op[2] == "Вывод":
+        amount = -abs(amount)
+    elif op[2] == "Пополнение":
+        amount = abs(amount)
+    update_operation_amount(account_id, op_id, amount)
+    await _refresh_edit_op_detail(message, state, "✅ Сумма обновлена")
+
+
+# --- Заметка ---
+@router.callback_query(F.data == "edit_op_field_note")
+async def callback_edit_op_note(callback: types.CallbackQuery, state: FSMContext):
+    await update_interface(
+        state,
+        callback,
+        "✍️ Введите новую **заметку** (или `-` чтобы очистить):",
+        reply_markup=get_back_keyboard(),
+        parse_mode="Markdown",
+    )
+    await state.set_state(EditOpState.edit_note)
+
+
+@router.message(EditOpState.edit_note)
+async def process_edit_op_note(message: types.Message, state: FSMContext):
+    note, error = validate_note(message.text)
+    if error:
+        await update_interface(
+            state,
+            message,
+            f"⚠️ {error}",
+            reply_markup=get_back_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+    if note == "-":
+        note = ""
+    data = await state.get_data()
+    op_id = data.get("edit_op_id")
+    account_id = get_active_account_id(message.from_user.id)
+    update_operation_note(account_id, op_id, note)
+    await _refresh_edit_op_detail(message, state, "✅ Заметка обновлена")
