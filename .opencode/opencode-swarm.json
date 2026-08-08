@@ -1,0 +1,44 @@
+{
+  "agents": {
+    "architect": {
+      "model": "opencode/kimi-k2.5-free",
+      "fallback_models": ["opencode/big-pickle", "opencode/gpt-5-nano"]
+    },
+    "explorer": {
+      "model": "opencode/gpt-5-nano",
+      "fallback_models": ["opencode/big-pickle"]
+    },
+    "sme": {
+      "model": "opencode/gpt-5-nano",
+      "fallback_models": ["opencode/big-pickle"]
+    },
+    "coder": {
+      "model": "opencode/big-pickle",
+      "fallback_models": ["opencode/gpt-5-nano", "opencode/big-pickle"]
+    },
+    "reviewer": {
+      "model": "opencode/big-pickle",
+      "fallback_models": ["opencode/gpt-5-nano", "opencode/big-pickle"]
+    },
+    "critic": {
+      "model": "opencode/gpt-5-nano",
+      "fallback_models": ["opencode/big-pickle"]
+    },
+    "test_engineer": {
+      "model": "opencode/gpt-5-nano",
+      "fallback_models": ["opencode/big-pickle"]
+    },
+    "docs": {
+      "model": "opencode/minimax-m2.7-free",
+      "fallback_models": ["opencode/big-pickle"]
+    },
+    "designer": {
+      "model": "opencode/minimax-m2.7-free",
+      "fallback_models": ["opencode/big-pickle"]
+    }
+  },
+  "council": {
+    "enabled": true,
+    "maxRounds": 3
+  }
+}
