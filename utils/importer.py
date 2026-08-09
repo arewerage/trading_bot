@@ -3,6 +3,8 @@ import csv
 import io
 from datetime import datetime
 
+from utils.i18n import t
+
 _HEADER_ALIASES = {
     "date": {"date", "дата"},
     "op_type": {"op_type", "optype", "тип операции", "тип", "type", "операция", "типоперации"},
@@ -75,17 +77,19 @@ def _normalize_op_type(value) -> str | None:
     return _OP_TYPE_ALIASES.get(key)
 
 
-def _row_to_op(row: dict, line_no: int):
+def _row_to_op(row: dict, line_no: int, lang: str = "ru"):
     """Валидирует строку и возвращает словарь операции или строку ошибки."""
     date_str = _parse_date(row.get("date"))
     if not date_str:
-        return f"Строка {line_no}: неверный формат даты."
+        return t(lang, "imp.row_bad_date", line=line_no)
     op_type = _normalize_op_type(row.get("op_type"))
     if not op_type:
-        return f"Строка {line_no}: неизвестный тип операции `{row.get('op_type')}`."
+        return t(
+            lang, "imp.row_unknown_type", line=line_no, value=row.get("op_type")
+        )
     amount = _parse_float(row.get("amount"))
     if amount is None or amount == 0:
-        return f"Строка {line_no}: некорректная сумма."
+        return t(lang, "imp.row_bad_amount", line=line_no)
 
     pair = str(row.get("pair") or "-").strip().upper() or "-"
     lot = _parse_float(row.get("lot")) or 0.0
@@ -101,7 +105,7 @@ def _row_to_op(row: dict, line_no: int):
         if result not in ("Win", "Loss"):
             result = "Win" if amount >= 0 else "Loss"
         if pair == "-":
-            return f"Строка {line_no}: для сделки укажите торговую пару."
+            return t(lang, "imp.row_need_pair", line=line_no)
         return {
             "date": date_str,
             "op_type": op_type,
@@ -134,9 +138,10 @@ def _row_to_op(row: dict, line_no: int):
     }
 
 
-def parse_import_data(data: bytes, filename: str):
+def parse_import_data(data: bytes, filename: str, lang: str = "ru"):
     """Разбирает CSV/Excel и возвращает (ops, errors).
-    ops — список словарей операций, отсортированный по дате."""
+    ops — список словарей операций, отсортированный по дате.
+    lang — язык текстов ошибок разбора строк (см. utils.i18n)."""
     name = (filename or "").lower()
     raw_rows = []
     if name.endswith(".xlsx") or name.endswith(".xls"):
@@ -170,9 +175,11 @@ def parse_import_data(data: bytes, filename: str):
                 mapped[canonical] = value
         missing = _REQUIRED - set(mapped.keys())
         if missing:
-            errors.append(f"Строка {line_no}: не хватает колонок {sorted(missing)}.")
+            errors.append(
+                t(lang, "imp.row_missing_cols", line=line_no, cols=sorted(missing))
+            )
             continue
-        parsed = _row_to_op(mapped, line_no)
+        parsed = _row_to_op(mapped, line_no, lang)
         if isinstance(parsed, str):
             errors.append(parsed)
         else:

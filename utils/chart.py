@@ -7,16 +7,25 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
+from utils.i18n import t
+
 
 def generate_balance_chart_bytes(
-    operations, currency: str, title: str | None = None, start_date: str | None = None
+    operations,
+    currency: str,
+    title: str | None = None,
+    start_date: str | None = None,
+    lang: str = "ru",
 ) -> bytes | None:
     """Строит график баланса по операциям счёта и возвращает PNG-байты.
 
     operations — строки get_operations (сортировка по (date, id)); кривая
     считается кумулятивно по ВСЕМ операциям, но точки рисуются только от
     start_date («ГГГГ-ММ-ДД»), так что баланс на периоде стартует корректно.
+
+    lang — язык заголовка графика (ключ локализации chart.title).
     """
+
     ordered = sorted(operations, key=lambda r: (r[0], r[11]))
     dates, balance = [], []
     win_d, win_b = [], []
@@ -69,7 +78,9 @@ def generate_balance_chart_bytes(
     if wd_d:
         ax.scatter(wd_d, wd_b, marker="x", s=48, color="#e74c3c", zorder=4, linewidths=1.6)
 
-    ax.set_title(title or f"График баланса ({currency})", fontsize=12, pad=10)
+    ax.set_title(
+        title or t(lang, "chart.title", currency=currency), fontsize=12, pad=10
+    )
     ax.grid(True, alpha=0.3, linestyle="--")
     ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
     for label in ax.get_xticklabels():

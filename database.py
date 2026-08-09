@@ -154,7 +154,8 @@ def init_db():
             user_id INTEGER PRIMARY KEY,
             active_account_id INTEGER DEFAULT 0,
             tz_offset INTEGER DEFAULT 0,
-            daily_report INTEGER DEFAULT 0
+            daily_report INTEGER DEFAULT 0,
+            language TEXT DEFAULT 'ru'
         )
     """
     )
@@ -228,6 +229,7 @@ def _migrate(conn):
         ("active_account_id", "INTEGER DEFAULT 0"),
         ("tz_offset", "INTEGER DEFAULT 0"),
         ("daily_report", "INTEGER DEFAULT 0"),
+        ("language", "TEXT DEFAULT 'ru'"),
     ]:
         if col not in user_cols:
             cur.execute(f"ALTER TABLE users ADD COLUMN {col} {ddl}")
@@ -1018,6 +1020,35 @@ def reset_user_data(user_id: int):
 
 
 # ==================== Настройки пользователя ====================
+
+
+def user_exists(user_id: int) -> bool:
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row is not None
+
+
+def get_user_language(user_id: int) -> str:
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else "ru"
+
+
+def set_user_language(user_id: int, lang: str) -> None:
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    cur.execute(
+        "UPDATE users SET language = ? WHERE user_id = ?", (lang, user_id)
+    )
+    conn.commit()
+    conn.close()
 
 
 def get_user_tz_offset(user_id: int) -> int:

@@ -1,6 +1,10 @@
 from aiogram.fsm.state import State, StatesGroup
 
 
+class LanguageState(StatesGroup):
+    waiting_for_language = State()
+
+
 class DepositState(StatesGroup):
     waiting_for_currency = State()
     waiting_for_deposit = State()

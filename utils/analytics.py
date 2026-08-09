@@ -1,3 +1,6 @@
+from utils.i18n import t
+
+
 def calculate_advanced_stats(operations, filter_func=None):
     """Расширенная статистика по сделкам. operations — строки счётных операций
     (date, op_type, pair, lot, result, amount, balance_after, ...)."""
@@ -101,23 +104,30 @@ def calculate_stats_by_pair(operations, filter_func=None):
     return out
 
 
-def format_stats_by_pair(pairs, currency: str, title: str) -> str:
+def format_stats_by_pair(pairs, currency: str, title: str, lang: str = "ru") -> str:
     """Текст таблицы «статистика по парам» для Telegram."""
     if not pairs:
-        return f"📊 **{title}:**\n\nСделок не найдено."
-    lines = [f"📊 **{title}:**\n"]
+        return t(lang, "stats.no_trades", title=title)
+    lines = [t(lang, "stats.header", title=title)]
     for pair, s in pairs:
         lines.append(
-            f"🔹 `{pair}`: `{s['n']}` сделок | винрейт `{s['winrate']:.0f}%` | "
-            f"итог `{s['pl']:+.2f} {currency}`"
+            t(
+                lang,
+                "stats.pair_line",
+                pair=pair,
+                count=s["n"],
+                winrate=f"{s['winrate']:.0f}",
+                total=f"{s['pl']:+.2f}",
+                currency=currency,
+            )
         )
     return "\n".join(lines)
 
 
-def format_stats_text(stats, currency: str, title: str) -> str:
+def format_stats_text(stats, currency: str, title: str, lang: str = "ru") -> str:
     """Формирует текст статистики для сообщения в Telegram."""
     if not stats:
-        return f"📊 **{title}:**\n\nСделок не найдено."
+        return t(lang, "stats.no_trades", title=title)
 
     rr = stats["rr"]
     rr_str = f"{rr:.2f}" if rr != float("inf") else "∞"
@@ -125,16 +135,50 @@ def format_stats_text(stats, currency: str, title: str) -> str:
     pf_str = f"{pf:.2f}" if pf != float("inf") else "∞"
 
     return (
-        f"📊 **{title}:**\n\n"
-        f"📁 Сделок: `{stats['total']}`\n"
-        f"✅ Плюсов: `{stats['wins']}` | ❌ Минусов: `{stats['losses']}`\n"
-        f"🎯 Винрейт: `{stats['winrate']:.1f}%`\n"
-        f"💰 Итог: `{stats['total_pl']:+.2f} {currency}`\n"
-        f"📈 Профит-фактор: `{pf_str}`\n"
-        f"📉 Ср. плюс / ср. минус: `{stats['avg_win']:.2f}` / `-{stats['avg_loss']:.2f}` {currency}\n"
-        f"⚖️ R:R (риск/прибыль): `{rr_str}`\n"
-        f"🎯 Ожидание на сделку: `{stats['expectancy']:+.2f} {currency}`\n"
-        f"🔝 Лучшая / худшая: `{stats['best']:+.2f}` / `{stats['worst']:+.2f}` {currency}\n"
-        f"🏔 Макс. просадка: `{stats['max_dd']:.2f} {currency}` (`{stats['max_dd_pct']:.1f}%`)\n"
-        f"⛓ Серии: `{stats['max_win_streak']}` побед / `{stats['max_loss_streak']}` поражений"
+        t(lang, "stats.header", title=title)
+        + "\n"
+        + t(lang, "stats.line_trades", count=stats["total"])
+        + t(lang, "stats.line_wins_losses", wins=stats["wins"], losses=stats["losses"])
+        + t(lang, "stats.line_winrate", winrate=f"{stats['winrate']:.1f}")
+        + t(
+            lang,
+            "stats.line_total",
+            total=f"{stats['total_pl']:+.2f}",
+            currency=currency,
+        )
+        + t(lang, "stats.line_profit_factor", pf=pf_str)
+        + t(
+            lang,
+            "stats.line_avg",
+            avg_win=f"{stats['avg_win']:.2f}",
+            avg_loss=f"{stats['avg_loss']:.2f}",
+            currency=currency,
+        )
+        + t(lang, "stats.line_rr", rr=rr_str)
+        + t(
+            lang,
+            "stats.line_expectancy",
+            expectancy=f"{stats['expectancy']:+.2f}",
+            currency=currency,
+        )
+        + t(
+            lang,
+            "stats.line_best_worst",
+            best=f"{stats['best']:+.2f}",
+            worst=f"{stats['worst']:+.2f}",
+            currency=currency,
+        )
+        + t(
+            lang,
+            "stats.line_max_dd",
+            max_dd=f"{stats['max_dd']:.2f}",
+            max_dd_pct=f"{stats['max_dd_pct']:.1f}",
+            currency=currency,
+        )
+        + t(
+            lang,
+            "stats.line_streaks",
+            win_streak=stats["max_win_streak"],
+            loss_streak=stats["max_loss_streak"],
+        )
     )

@@ -12,6 +12,7 @@ from handlers.common import update_interface
 from handlers.reports import send_daily_reports
 from keyboards.inline import get_back_keyboard, get_main_keyboard
 from states.fsm import AdminState
+from utils.i18n import get_lang, t
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +22,9 @@ router = Router()
 # --- Резервная копия базы данных (Только для администратора) ---
 @router.callback_query(F.data == "action_backup")
 async def callback_backup(callback: types.CallbackQuery, state: FSMContext):
+    lang = get_lang(callback.from_user.id)
     if callback.from_user.id != ADMIN_ID:
-        await callback.answer("⚠️ У вас нет доступа к этой функции.", show_alert=True)
+        await callback.answer(t(lang, "admin.no_access"), show_alert=True)
         return
 
     db_path = os.path.join("data", "trading_bot.db")
@@ -33,54 +35,55 @@ async def callback_backup(callback: types.CallbackQuery, state: FSMContext):
         await update_interface(
             state,
             callback,
-            "💾 **Резервная копия базы данных:**\n\nФайл актуальной базы данных успешно выгружен.",
-            reply_markup=get_main_keyboard(callback.from_user.id),
+            t(lang, "admin.backup_ok"),
+            reply_markup=get_main_keyboard(callback.from_user.id, lang=lang),
             parse_mode="Markdown",
             document=document,
         )
     else:
-        await callback.answer("⚠️ Файл базы данных не найден!", show_alert=True)
+        await callback.answer(t(lang, "admin.backup_missing"), show_alert=True)
 
 
 # --- Ручной запуск ежедневных отчётов (Только для администратора) ---
 @router.callback_query(F.data == "action_report_now")
 async def callback_report_now(callback: types.CallbackQuery, state: FSMContext):
+    lang = get_lang(callback.from_user.id)
     if callback.from_user.id != ADMIN_ID:
-        await callback.answer("⚠️ У вас нет доступа к этой функции.", show_alert=True)
+        await callback.answer(t(lang, "admin.no_access"), show_alert=True)
         return
     asyncio.create_task(send_daily_reports(callback.bot))
     await update_interface(
         state,
         callback,
-        "📊 **Отчёты отправляются** пользователям с включённым ежедневным отчётом…",
-        reply_markup=get_main_keyboard(callback.from_user.id),
+        t(lang, "admin.reports_sending"),
+        reply_markup=get_main_keyboard(callback.from_user.id, lang=lang),
         parse_mode="Markdown",
     )
 
 
 # --- Рассылка сообщения всем пользователям (Только для администратора) ---
 async def _show_broadcast_confirm(event, state: FSMContext, text: str):
+    lang = get_lang(event.from_user.id)
     count = len(get_all_user_ids())
     keyboard = [
         [
             types.InlineKeyboardButton(
-                text="✅ Отправить всем", callback_data="broadcast_confirm"
+                text=t(lang, "kb.send_all"), callback_data="broadcast_confirm"
             )
         ],
         [
             types.InlineKeyboardButton(
-                text="✏️ Изменить текст", callback_data="action_broadcast"
+                text=t(lang, "kb.change_text"), callback_data="action_broadcast"
             )
         ],
         [
-            types.InlineKeyboardButton(text="❌ Отмена", callback_data="main_menu"),
+            types.InlineKeyboardButton(text=t(lang, "kb.cancel"), callback_data="main_menu"),
         ],
     ]
     await update_interface(
         state,
         event,
-        f"📢 **Предпросмотр сообщения:**\n\n```\n{text}\n```\n\n"
-        f"Отправить **{count}** пользователям?",
+        t(lang, "admin.broadcast_preview", text=text, count=count),
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=keyboard),
         parse_mode="Markdown",
     )
@@ -89,14 +92,15 @@ async def _show_broadcast_confirm(event, state: FSMContext, text: str):
 
 @router.callback_query(F.data == "action_broadcast")
 async def callback_broadcast(callback: types.CallbackQuery, state: FSMContext):
+    lang = get_lang(callback.from_user.id)
     if callback.from_user.id != ADMIN_ID:
-        await callback.answer("⚠️ У вас нет доступа к этой функции.", show_alert=True)
+        await callback.answer(t(lang, "admin.no_access"), show_alert=True)
         return
     await update_interface(
         state,
         callback,
-        "📢 **Рассылка всем пользователям**\n\nВведите текст сообщения:",
-        reply_markup=get_back_keyboard(),
+        t(lang, "admin.broadcast_prompt"),
+        reply_markup=get_back_keyboard(lang=lang),
         parse_mode="Markdown",
     )
     await state.set_state(AdminState.waiting_for_broadcast)
@@ -104,16 +108,17 @@ async def callback_broadcast(callback: types.CallbackQuery, state: FSMContext):
 
 @router.message(AdminState.waiting_for_broadcast)
 async def process_broadcast_text(message: types.Message, state: FSMContext):
+    lang = get_lang(message.from_user.id)
     if message.from_user.id != ADMIN_ID:
-        await message.answer("Нет доступа.")
+        await message.answer(t(lang, "admin.no_access_plain"))
         return
     text = message.text.strip()
     if not text:
         await update_interface(
             state,
             message,
-            "⚠️ Сообщение не может быть пустым.",
-            reply_markup=get_back_keyboard(),
+            t(lang, "admin.broadcast_empty"),
+            reply_markup=get_back_keyboard(lang=lang),
             parse_mode="Markdown",
         )
         return
@@ -121,8 +126,8 @@ async def process_broadcast_text(message: types.Message, state: FSMContext):
         await update_interface(
             state,
             message,
-            "⚠️ Сообщение слишком длинное (максимум 4000 символов).",
-            reply_markup=get_back_keyboard(),
+            t(lang, "admin.broadcast_too_long"),
+            reply_markup=get_back_keyboard(lang=lang),
             parse_mode="Markdown",
         )
         return
@@ -132,15 +137,18 @@ async def process_broadcast_text(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data == "broadcast_confirm", AdminState.waiting_for_broadcast_confirm)
 async def process_broadcast_confirm(callback: types.CallbackQuery, state: FSMContext):
+    lang = get_lang(callback.from_user.id)
     data = await state.get_data()
     text = data.get("broadcast_text")
     if not text:
-        await callback.answer("Нет текста для отправки.", show_alert=True)
+        await callback.answer(t(lang, "admin.broadcast_no_text"), show_alert=True)
         return
     user_ids = get_all_user_ids()
     ok = fail = 0
     for uid in user_ids:
         try:
+            # Текст рассылки отправляется дословно, без перевода,
+            # — содержимое сообщения принадлежит автору (администратору).
             await callback.bot.send_message(uid, text)
             ok += 1
         except Exception as exc:
@@ -150,7 +158,7 @@ async def process_broadcast_confirm(callback: types.CallbackQuery, state: FSMCon
     await update_interface(
         state,
         callback,
-        f"📢 **Рассылка завершена:**\n\n✅ Отправлено: `{ok}`\n❌ Ошибок: `{fail}`",
-        reply_markup=get_main_keyboard(callback.from_user.id),
+        t(lang, "admin.broadcast_done", ok=ok, fail=fail),
+        reply_markup=get_main_keyboard(callback.from_user.id, lang=lang),
         parse_mode="Markdown",
     )
